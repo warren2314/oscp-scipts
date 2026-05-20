@@ -261,6 +261,7 @@ fi
   [[ -n "$TARGET" ]] && printf 'OSCP_TARGET=%s\n' "$TARGET"
   [[ -n "$ENV_SUBNET" ]] && printf 'OSCP_SUBNET=%s\n' "$ENV_SUBNET"
   echo "OSCP_WORDLIST=/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt"
+  echo "OSCP_VHOST_WORDLIST=/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
 } > "$ROOT/.oscp_env"
 chmod 600 "$ROOT/.oscp_env"
 

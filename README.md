@@ -55,9 +55,10 @@ For a single web service:
 
 ```bash
 ./scripts/oscp.sh enum-web 192.168.56.10 8080
+./scripts/oscp.sh enum-web 192.168.56.10 8080 example.local
 ```
 
-Web enumeration saves HTTP headers, WhatWeb output, Nikto checks when installed, HTTP nmap script output, and one directory brute-force run using the first available supported tool.
+Web enumeration saves HTTP headers, WhatWeb output, Nikto checks when installed, HTTP nmap script output, one directory brute-force run using the first available supported tool, and FFUF virtual-host checks. Pass a domain or set `OSCP_DOMAIN` in `.oscp_env` to also run FFUF `FUZZ.<domain>` subdomain Host header checks.
 
 ## Useful Commands
 

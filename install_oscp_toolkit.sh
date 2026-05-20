@@ -180,6 +180,7 @@ print_health_check() {
   echo "------------------------------------------------------------"
   echo " Web"
   check_any_tool "dir brute force" "content discovery" "feroxbuster:feroxbuster" "ffuf:ffuf" "gobuster:gobuster"
+  check_tool ffuf ffuf "vhost and subdomain checks"
   check_tool whatweb whatweb "web fingerprinting"
   check_tool nikto nikto "web misconfiguration checks"
 
@@ -209,6 +210,7 @@ print_health_check() {
   local seclists_paths=(
     "/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt"
     "/usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt"
+    "/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
   )
   local fallback_paths=(
     "/usr/share/wordlists/dirb/common.txt:dirb"

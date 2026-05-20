@@ -96,6 +96,29 @@ strip_outer_quotes() {
   printf '%s\n' "$val"
 }
 
+normalize_domain() {
+  local domain="${1:-}"
+  domain="${domain#http://}"
+  domain="${domain#https://}"
+  domain="${domain%%/*}"
+  domain="${domain%%:*}"
+  domain="${domain#.}"
+  domain="${domain%.}"
+  printf '%s\n' "$domain"
+}
+
+default_vhost_wordlist() {
+  local path
+  for path in \
+    "${OSCP_VHOST_WORDLIST:-}" \
+    /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt \
+    /usr/share/seclists/Discovery/DNS/namelist.txt \
+    /usr/share/seclists/Discovery/DNS/bitquark-subdomains-top100000.txt; do
+    [[ -n "$path" && -f "$path" ]] && { printf '%s\n' "$path"; return 0; }
+  done
+  return 1
+}
+
 load_env_file() {
   [[ -f "$ENV_FILE" ]] || return 0
 
@@ -119,6 +142,12 @@ load_env_file() {
       OSCP_WORDLIST)
         [[ -n "$val" ]] && OSCP_WORDLIST="$val"
         ;;
+      OSCP_DOMAIN)
+        [[ -n "$val" ]] && OSCP_DOMAIN="$val"
+        ;;
+      OSCP_VHOST_WORDLIST)
+        [[ -n "$val" ]] && OSCP_VHOST_WORDLIST="$val"
+        ;;
       OSCP_DISCOVERY_PORTS|OSCP_DISCOVERY_PORTS_WIDE)
         if [[ "$val" =~ ^[0-9,]+$ ]]; then
           printf -v "$key" '%s' "$val"
@@ -141,7 +170,9 @@ save_env_file() {
     echo "# OSCP toolkit workspace state"
     [[ -n "$target" ]] && printf 'OSCP_TARGET=%s\n' "$target"
     [[ -n "$subnet" ]] && printf 'OSCP_SUBNET=%s\n' "$subnet"
+    [[ -n "${OSCP_DOMAIN:-}" ]] && printf 'OSCP_DOMAIN=%s\n' "$OSCP_DOMAIN"
     printf 'OSCP_WORDLIST=%s\n' "${OSCP_WORDLIST:-/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt}"
+    printf 'OSCP_VHOST_WORDLIST=%s\n' "${OSCP_VHOST_WORDLIST:-/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt}"
   } > "$ENV_FILE"
   chmod 600 "$ENV_FILE"
   ok "Saved $ENV_FILE"
@@ -346,8 +377,8 @@ Discovery and scanning:
 
 Service enumeration:
   ./scripts/oscp.sh enum-all [IP]              # service enum based on nmap-full
-  ./scripts/oscp.sh enum-web <IP> <PORT>
-  ./scripts/oscp.sh web-all [IP]
+  ./scripts/oscp.sh enum-web <IP> <PORT> [DOMAIN]
+  ./scripts/oscp.sh web-all [IP] [DOMAIN]
   ./scripts/oscp.sh enum-smb <IP>
   ./scripts/oscp.sh enum-ftp <IP> [PORT]
   ./scripts/oscp.sh enum-ssh <IP> [PORT]
@@ -369,8 +400,8 @@ Logging:
   ./scripts/oscp.sh hash "<hash> (type/source)"
 
 Environment:
-  .oscp_env supports OSCP_TARGET, OSCP_SUBNET, OSCP_WORDLIST,
-  OSCP_DISCOVERY_PORTS, OSCP_DISCOVERY_PORTS_WIDE.
+  .oscp_env supports OSCP_TARGET, OSCP_SUBNET, OSCP_DOMAIN, OSCP_WORDLIST,
+  OSCP_VHOST_WORDLIST, OSCP_DISCOVERY_PORTS, OSCP_DISCOVERY_PORTS_WIDE.
   OSCP_YES=1 skips confirmation prompts.
 USAGE
 }
@@ -517,14 +548,18 @@ show_ports() {
 web_triage() {
   local ip="${1:-}"
   local port="${2:-}"
+  local domain_arg="${3:-}"
   [[ -n "$ip" && -n "$port" ]] || die "usage: enum-web <IP> <PORT>"
   require_ipv4 "$ip" "web target"
   [[ "$port" =~ ^[0-9]+$ ]] || die "Invalid port: $port"
 
-  local url outdir wordlist
+  load_env_file
+
+  local url outdir wordlist vhost_wordlist domain
   url="$(url_for_port "$ip" "$port")"
   outdir="$WEB_DIR/${ip}_${port}"
   mkdir -p "$outdir"
+  domain="$(normalize_domain "${domain_arg:-${OSCP_DOMAIN:-}}")"
 
   wordlist="${OSCP_WORDLIST:-/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt}"
   if [[ ! -f "$wordlist" && -f /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt ]]; then
@@ -535,6 +570,7 @@ web_triage() {
 
   info "Web triage: $url"
   info "Output: $outdir"
+  [[ -n "$domain" ]] && info "Domain: $domain"
 
   local -a pids=()
   if need_cmd whatweb; then
@@ -575,6 +611,25 @@ web_triage() {
     warn "No usable wordlist found; skipping content discovery"
   fi
 
+  if need_cmd ffuf; then
+    if vhost_wordlist="$(default_vhost_wordlist)"; then
+      info "Vhost wordlist: $vhost_wordlist"
+      ( ffuf -u "$url/" -H "Host: FUZZ" -w "$vhost_wordlist" -ac -of csv -o "$outdir/ffuf_vhosts.csv" > "$outdir/ffuf_vhosts.console.txt" 2>&1 ) &
+      pids+=("$!")
+
+      if [[ -n "$domain" ]]; then
+        ( ffuf -u "$url/" -H "Host: FUZZ.$domain" -w "$vhost_wordlist" -ac -of csv -o "$outdir/ffuf_subdomains.csv" > "$outdir/ffuf_subdomains.console.txt" 2>&1 ) &
+        pids+=("$!")
+      else
+        warn "No OSCP_DOMAIN or enum-web domain argument; skipping FUZZ.<domain> subdomain checks"
+      fi
+    else
+      warn "No usable DNS/vhost wordlist found; skipping ffuf vhost checks"
+    fi
+  else
+    warn "ffuf not found; skipping vhost and subdomain checks"
+  fi
+
   local pid
   for pid in "${pids[@]}"; do
     wait "$pid" 2>/dev/null || true
@@ -585,15 +640,16 @@ web_triage() {
 }
 
 web_all() {
-  local target ports port any=0
+  local target ports port domain any=0
   target="$(target_or_default "${1:-}")"
+  domain="$(normalize_domain "${2:-${OSCP_DOMAIN:-}}")"
   ports="$(get_ports_for_target "$target" || true)"
   [[ -n "$ports" ]] || die "No saved port list for $target. Run nmap-full first."
 
   while IFS= read -r port; do
     if is_web_port "$port"; then
       any=1
-      web_triage "$target" "$port"
+      web_triage "$target" "$port" "$domain"
     fi
   done < <(ports_as_lines "$ports")
 
@@ -754,7 +810,7 @@ enum_all() {
       *)
         if is_web_port "$port"; then
           did_web=1
-          web_triage "$target" "$port"
+          web_triage "$target" "$port" "${OSCP_DOMAIN:-}"
         fi
         ;;
     esac
@@ -936,7 +992,9 @@ status() {
   echo " Workspace : $ROOT_DIR"
   echo " Target    : ${OSCP_TARGET:-<not set>}"
   echo " Subnet    : ${OSCP_SUBNET:-<not set>}"
+  echo " Domain    : ${OSCP_DOMAIN:-<not set>}"
   echo " Wordlist  : ${OSCP_WORDLIST:-<default>}"
+  echo " Vhosts    : ${OSCP_VHOST_WORDLIST:-<default>}"
   echo "--------------------------------------------"
   if [[ -s "$LIVE_HOSTS" ]]; then
     echo " Live hosts: $(wc -l < "$LIVE_HOSTS") in $LIVE_HOSTS"
@@ -956,6 +1014,7 @@ status() {
 set_target() {
   local target="${1:-}"
   local subnet="${2:-}"
+  load_env_file
   [[ -n "$target" ]] || die "set-target needs an IP"
   require_ipv4 "$target" "target"
   [[ -n "$subnet" ]] || subnet="$(infer_subnet_24 "$target" || true)"
@@ -976,8 +1035,8 @@ case "$cmd" in
   nmap-vuln) shift; nmap_vuln "${1:-}" ;;
   ports) shift; show_ports "${1:-}" ;;
   enum-all) shift; enum_all "${1:-}" ;;
-  enum-web|web-triage) shift; web_triage "${1:-}" "${2:-}" ;;
-  web-all) shift; web_all "${1:-}" ;;
+  enum-web|web-triage) shift; web_triage "${1:-}" "${2:-}" "${3:-}" ;;
+  web-all) shift; web_all "${1:-}" "${2:-}" ;;
   enum-smb) shift; enum_smb "${1:-}" ;;
   enum-ftp) shift; enum_ftp "${1:-}" "${2:-21}" ;;
   enum-ssh) shift; enum_ssh "${1:-}" "${2:-22}" ;;

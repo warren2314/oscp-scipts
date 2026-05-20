@@ -39,6 +39,7 @@ strip_outer_quotes() {
 load_env() {
   OSCP_TARGET="${OSCP_TARGET:-}"
   OSCP_SUBNET="${OSCP_SUBNET:-}"
+  OSCP_DOMAIN="${OSCP_DOMAIN:-}"
   [[ -f "$ENV_FILE" ]] || return 0
 
   local line key val
@@ -52,6 +53,7 @@ load_env() {
     case "$key" in
       OSCP_TARGET) OSCP_TARGET="$val" ;;
       OSCP_SUBNET) OSCP_SUBNET="$val" ;;
+      OSCP_DOMAIN) OSCP_DOMAIN="$val" ;;
       OSCP_WORDLIST) OSCP_WORDLIST="$val" ;;
     esac
   done < "$ENV_FILE"
@@ -219,19 +221,21 @@ action_enum_all() {
 }
 
 action_web_all() {
-  local ip
+  local ip domain
   ip="$(target_prompt)"
   [[ -z "$ip" ]] && { echo "${RED}[-] No IP.${RESET}"; return; }
-  "$OSCP" web-all "$ip"
+  domain="$(prompt "Domain for FUZZ.<domain> checks (blank = skip)" "${OSCP_DOMAIN:-}")"
+  "$OSCP" web-all "$ip" "$domain"
 }
 
 action_web_one() {
-  local ip port
+  local ip port domain
   ip="$(target_prompt)"
   [[ -z "$ip" ]] && { echo "${RED}[-] No IP.${RESET}"; return; }
   port="$(prompt "Port" "80")"
   [[ -z "$port" ]] && { echo "${RED}[-] No port.${RESET}"; return; }
-  "$OSCP" enum-web "$ip" "$port"
+  domain="$(prompt "Domain for FUZZ.<domain> checks (blank = skip)" "${OSCP_DOMAIN:-}")"
+  "$OSCP" enum-web "$ip" "$port" "$domain"
 }
 
 action_smb() {
