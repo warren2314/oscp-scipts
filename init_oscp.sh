@@ -111,6 +111,7 @@ mkdir -p \
   "$ROOT/scans/vuln" \
   "$ROOT/ftp" \
   "$ROOT/ldap" \
+  "$ROOT/ad" \
   "$ROOT/smb" \
   "$ROOT/rpc" \
   "$ROOT/snmp" \
@@ -118,19 +119,27 @@ mkdir -p \
   "$ROOT/winrm" \
   "$ROOT/loot" \
   "$ROOT/cracks" \
+  "$ROOT/creds" \
   "$ROOT/exploits" \
   "$ROOT/screenshots" \
   "$ROOT/evidence" \
+  "$ROOT/proof" \
   "$ROOT/pivots" \
   "$ROOT/privesc/linux" \
   "$ROOT/privesc/windows" \
+  "$ROOT/notes" \
   "$ROOT/scripts" \
   "$ROOT/output" \
   "$ROOT/reports" \
   "$ROOT/transfer"
 
-touch "$ROOT/hosts.txt" "$ROOT/creds.txt" "$ROOT/todo.txt" "$ROOT/loot/hashes.txt"
+touch "$ROOT/hosts.txt" "$ROOT/creds.txt" "$ROOT/todo.txt" "$ROOT/loot/hashes.txt" "$ROOT/commands.log"
 touch "$ROOT/evidence/screenshots.md"
+
+cat > "$ROOT/creds/creds.csv" <<'EOF'
+time,service,user,password_or_hash,source,tested,notes
+EOF
+chmod 600 "$ROOT/creds/creds.csv"
 
 cat > "$ROOT/notes.md" <<EOF
 # ${NAME} - Notes
@@ -147,6 +156,9 @@ cat > "$ROOT/notes.md" <<EOF
 - Save command output to the workspace, not only terminal scrollback.
 - For every interesting finding, record source, command, evidence path, and next action.
 - Prefer proving a path manually before running noisy scanners.
+- Keep this as static local tooling; do not use an LLM/chatbot during the exam or report phase.
+- Do not use automatic exploitation, mass vulnerability scanning, SQLmap-style automation, or restricted tool features.
+- Verify the live exam guide and control panel before relying on any rule or point tracker.
 
 ---
 
@@ -201,6 +213,83 @@ cat > "$ROOT/notes.md" <<EOF
 ---
 EOF
 
+cat > "$ROOT/notes/00-summary.md" <<EOF
+# ${NAME} - ${TARGET:-<target>}
+
+## Status
+
+- [ ] TCP full scan complete
+- [ ] TCP deep scan complete
+- [ ] UDP top ports checked where time allows
+- [ ] Web enum complete
+- [ ] SMB enum complete
+- [ ] Initial access documented
+- [ ] Privilege escalation documented
+- [ ] local.txt submitted
+- [ ] proof.txt submitted
+- [ ] Screenshots captured
+- [ ] Report notes complete
+
+## Current Theory
+
+## Creds Found
+
+## Flags
+
+## Next Actions
+
+1.
+2.
+3.
+EOF
+
+cat > "$ROOT/notes/01-enum.md" <<'EOF'
+# Enumeration Notes
+
+## TCP
+
+## UDP
+
+## Web
+
+## SMB
+
+## AD Indicators
+
+## Interesting Findings
+EOF
+
+cat > "$ROOT/notes/02-exploitation.md" <<'EOF'
+# Exploitation Notes
+
+Record only manual, scoped attack steps you can reproduce in the report.
+
+## Initial Access Path
+
+## Commands
+
+## Evidence
+EOF
+
+cat > "$ROOT/notes/03-privesc.md" <<'EOF'
+# Privilege Escalation Notes
+
+## Local Enumeration
+
+## Credential Reuse
+
+## Misconfigurations
+
+## Proof
+EOF
+
+cat > "$ROOT/notes/04-report-commands.md" <<'EOF'
+# Report Command Log
+
+Paste the important commands here in order.
+Keep raw output in the generated scan/service folders.
+EOF
+
 cat > "$ROOT/reports/findings.md" <<EOF
 # ${NAME} - Findings Draft
 
@@ -240,6 +329,40 @@ Use this as a clean reporting draft. Keep raw notes in ../notes.md and command o
 **Remediation**
 
 <specific fix>
+EOF
+
+cat > "$ROOT/reports/scoring.md" <<'EOF'
+# Score Tracker
+
+Use the exam control panel and current official guide as the source of truth.
+This file is a default OSCP+ tracker template, not an authority on live rules.
+
+## Standalone 1
+
+- [ ] local.txt - 10
+- [ ] proof.txt - 10
+
+## Standalone 2
+
+- [ ] local.txt - 10
+- [ ] proof.txt - 10
+
+## Standalone 3
+
+- [ ] local.txt - 10
+- [ ] proof.txt - 10
+
+## AD
+
+- [ ] machine #1 - 10
+- [ ] machine #2 - 10
+- [ ] machine #3 - 20
+
+## Total
+
+- Current points:
+- Passing target: 70/100
+- Control panel checked:
 EOF
 
 cat > "$ROOT/evidence/screenshots.md" <<EOF
@@ -283,13 +406,18 @@ CLI workflow:
   ./scripts/oscp.sh set-target <ip> [cidr]
   ./scripts/oscp.sh nmap-full
   ./scripts/oscp.sh nmap-deep
+  ./scripts/oscp.sh suggest
   ./scripts/oscp.sh enum-all
 
 Common logging:
   ./scripts/oscp.sh note "found anonymous SMB share"
   ./scripts/oscp.sh cred "bob:Password123 (SMB on 192.168.56.10)"
+  ./scripts/oscp.sh add-cred smb bob 'Password123' 'anonymous share config'
   ./scripts/oscp.sh hash "<hash> (source/type)"
   ./scripts/oscp.sh screenshot "proof shell with ip address visible"
+  ./scripts/oscp.sh proof local
+  ./scripts/oscp.sh stuck
+  ./scripts/oscp.sh score
 
 One-shot baseline:
   ./scripts/cmds.sh

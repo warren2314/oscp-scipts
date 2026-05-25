@@ -41,6 +41,7 @@ Without the alias:
 ./scripts/oscp.sh status
 ./scripts/oscp.sh nmap-full
 ./scripts/oscp.sh nmap-deep
+./scripts/oscp.sh suggest
 ./scripts/oscp.sh enum-all
 ```
 
@@ -67,7 +68,13 @@ Web enumeration saves HTTP headers, WhatWeb output, Nikto checks when installed,
 ./scripts/oscp.sh web-all
 ./scripts/oscp.sh enum-smb 192.168.56.10
 ./scripts/oscp.sh enum-ldap 192.168.56.10
+./scripts/oscp.sh ad 192.168.56.10
 ./scripts/oscp.sh nmap-udp
+./scripts/oscp.sh loot-linux
+./scripts/oscp.sh loot-windows
+./scripts/oscp.sh proof local
+./scripts/oscp.sh stuck
+./scripts/oscp.sh score
 ./scripts/oscp.sh loot-search password
 ./scripts/oscp.sh serve 8000
 ./scripts/oscp.sh listener 4444
@@ -79,10 +86,26 @@ Web enumeration saves HTTP headers, WhatWeb output, Nikto checks when installed,
 ```bash
 ./scripts/oscp.sh note "anonymous SMB share exposes backup.zip"
 ./scripts/oscp.sh cred "bob:Password123 (SMB on 192.168.56.10)"
+./scripts/oscp.sh add-cred smb bob 'Password123' 'backup.zip config'
 ./scripts/oscp.sh hash "<hash> (source/type)"
 ```
 
-The workspace contains `notes.md`, `reports/findings.md`, service folders, scan output, screenshots, evidence, transfer files, and loot. Keep raw command output in the generated folders and write concise findings in `reports/findings.md`.
+The workspace contains `notes.md`, `notes/`, `reports/findings.md`, `reports/scoring.md`, `commands.log`, `creds/creds.csv`, service folders, scan output, screenshots, evidence, transfer files, and loot. Keep raw command output in the generated folders and write concise findings in `reports/findings.md`.
+
+## Buddy Helpers
+
+These commands are intentionally decision-support helpers. They print manual checks, command blocks, and reporting reminders; they do not select exploits, brute-force services by default, run SQLmap, or chain exploitation.
+
+```bash
+./scripts/oscp.sh suggest
+./scripts/oscp.sh ad
+./scripts/oscp.sh loot-linux
+./scripts/oscp.sh loot-windows
+./scripts/oscp.sh proof proof
+./scripts/oscp.sh stuck
+./scripts/oscp.sh score
+./scripts/oscp.sh hash-guess '<hash>'
+```
 
 ## Screenshot Evidence
 
@@ -100,3 +123,5 @@ Do not treat this as a replacement for the current official report guide. Use it
 ## Scope
 
 Use this only for systems you are authorised to test. The scripts are designed for lab and exam-style enumeration, not uncontrolled scanning.
+
+For an actual exam, treat this as prebuilt static local tooling only. Verify the live OffSec guide and control panel, and do not use LLM/chatbot help during the exam or report phase.

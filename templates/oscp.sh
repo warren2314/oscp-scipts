@@ -20,7 +20,10 @@ LDAP_DIR="$ROOT_DIR/ldap"
 RPC_DIR="$ROOT_DIR/rpc"
 SNMP_DIR="$ROOT_DIR/snmp"
 WINRM_DIR="$ROOT_DIR/winrm"
+AD_DIR="$ROOT_DIR/ad"
 LOOT_DIR="$ROOT_DIR/loot"
+CREDS_DIR="$ROOT_DIR/creds"
+PROOF_DIR="$ROOT_DIR/proof"
 TRANSFER_DIR="$ROOT_DIR/transfer"
 SCREENSHOTS_DIR="$ROOT_DIR/screenshots"
 EVIDENCE_DIR="$ROOT_DIR/evidence"
@@ -28,13 +31,16 @@ LIVE_HOSTS="$SCANS_DIR/live_hosts.txt"
 ENV_FILE="$ROOT_DIR/.oscp_env"
 HOSTS_FILE="$ROOT_DIR/hosts.txt"
 CREDS_FILE="$ROOT_DIR/creds.txt"
+CREDS_CSV="$CREDS_DIR/creds.csv"
 NOTES_FILE="$ROOT_DIR/notes.md"
 HASHES_FILE="$LOOT_DIR/hashes.txt"
+COMMANDS_LOG="$ROOT_DIR/commands.log"
+SCORING_FILE="$ROOT_DIR/reports/scoring.md"
 SCREENSHOT_INDEX="$EVIDENCE_DIR/screenshots.md"
 
 mkdir -p "$DISC_DIR" "$NMAP_DIR" "$VULN_DIR" "$WEB_DIR" "$SMB_DIR" "$FTP_DIR" \
-  "$LDAP_DIR" "$RPC_DIR" "$SNMP_DIR" "$WINRM_DIR" "$LOOT_DIR" "$TRANSFER_DIR" \
-  "$SCREENSHOTS_DIR" "$EVIDENCE_DIR"
+  "$LDAP_DIR" "$RPC_DIR" "$SNMP_DIR" "$WINRM_DIR" "$AD_DIR" "$LOOT_DIR" \
+  "$CREDS_DIR" "$PROOF_DIR" "$TRANSFER_DIR" "$SCREENSHOTS_DIR" "$EVIDENCE_DIR"
 
 DEFAULT_DISCOVERY_PORTS="53,80,88,135,139,389,443,445,464,593,636,3268,3269,3389,5985,5986"
 DEFAULT_DISCOVERY_PORTS_WIDE="21,22,23,25,53,80,110,111,135,139,143,389,443,445,465,587,636,993,995,1433,1521,2049,2375,3000,3128,3306,3389,5000,5432,5601,5900,5985,5986,6379,8000,8008,8080,8081,8443,8888,9000,9090,9200,11211,27017,50000"
@@ -204,6 +210,18 @@ command_line() {
   printf '\n'
 }
 
+log_command() {
+  local outfile="${1:-}"
+  shift || true
+  [[ "$#" -gt 0 ]] || return 0
+
+  {
+    printf '[%s] ' "$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+    command_line "$@"
+    [[ -n "$outfile" ]] && printf '  output: %s\n' "${outfile#$ROOT_DIR/}"
+  } >> "$COMMANDS_LOG"
+}
+
 run_capture() {
   local label="${1:?label required}"
   local outfile="${2:?output file required}"
@@ -211,6 +229,7 @@ run_capture() {
 
   mkdir -p "$(dirname "$outfile")"
   info "$label -> $outfile"
+  log_command "$outfile" "$@"
 
   set +e
   {
@@ -273,6 +292,88 @@ cred() {
   note "Cred: $entry"
 }
 
+add_cred_structured() {
+  local service="${1:-}"
+  local user="${2:-}"
+  local secret="${3:-}"
+  local source="${4:-manual}"
+
+  [[ -n "$service" && -n "$user" && -n "$secret" ]] || die "usage: add-cred SERVICE USER PASSWORD_OR_HASH [SOURCE]"
+  load_env_file
+  local target="${OSCP_TARGET:-TARGET}"
+
+  ensure_creds_csv
+  {
+    csv_cell "$(date -Iseconds)"; printf ','
+    csv_cell "$service"; printf ','
+    csv_cell "$user"; printf ','
+    csv_cell "$secret"; printf ','
+    csv_cell "$source"; printf ','
+    csv_cell "no"; printf ','
+    csv_cell ""
+    printf '\n'
+  } >> "$CREDS_CSV"
+
+  echo "$(date +"%Y-%m-%d %H:%M") - $service - $user:$secret ($source)" >> "$CREDS_FILE"
+  note "Cred: $service $user from $source"
+
+  ok "Credential logged:"
+  echo "  $CREDS_CSV"
+  echo
+  cat <<EOF
+[TRY MANUAL REUSE]
+ssh '$user@$target'
+smbclient -L '//$target' -U '$user%$secret'
+netexec smb '$target' -u '$user' -p '$secret'
+netexec winrm '$target' -u '$user' -p '$secret'
+evil-winrm -i '$target' -u '$user' -p '$secret'
+EOF
+}
+
+guess_hash_type() {
+  local entry="$*"
+  [[ -n "$entry" ]] || die "hash-guess needs a hash value"
+
+  local h="${entry%%[[:space:]]*}"
+  h="${h#<}"
+  h="${h%>}"
+
+  echo "[HASH GUESS]"
+  if [[ "$h" =~ ^\$krb5tgs\$23\$ ]]; then
+    echo "Likely Kerberoast TGS"
+    echo "hashcat -m 13100 hash.txt /usr/share/wordlists/rockyou.txt"
+    echo "john --format=krb5tgs --wordlist=/usr/share/wordlists/rockyou.txt hash.txt"
+  elif [[ "$h" =~ ^\$krb5asrep\$23\$ ]]; then
+    echo "Likely AS-REP roast"
+    echo "hashcat -m 18200 hash.txt /usr/share/wordlists/rockyou.txt"
+    echo "john --format=krb5asrep --wordlist=/usr/share/wordlists/rockyou.txt hash.txt"
+  elif [[ "$h" =~ ^\$2[aby]\$ ]]; then
+    echo "Likely bcrypt"
+    echo "hashcat -m 3200 hash.txt /usr/share/wordlists/rockyou.txt"
+    echo "john --format=bcrypt --wordlist=/usr/share/wordlists/rockyou.txt hash.txt"
+  elif [[ "$h" =~ ^\$6\$ ]]; then
+    echo "Likely SHA-512 crypt"
+    echo "hashcat -m 1800 hash.txt /usr/share/wordlists/rockyou.txt"
+    echo "john --format=sha512crypt --wordlist=/usr/share/wordlists/rockyou.txt hash.txt"
+  elif [[ "$h" =~ ^\$P\$|^\$H\$ ]]; then
+    echo "Likely phpass / WordPress"
+    echo "hashcat -m 400 hash.txt /usr/share/wordlists/rockyou.txt"
+    echo "john --format=phpass --wordlist=/usr/share/wordlists/rockyou.txt hash.txt"
+  elif [[ "$h" =~ ^[A-Fa-f0-9]{32}$ ]]; then
+    echo "Could be raw MD5 or NTLM depending on context"
+    echo "MD5 : hashcat -m 0 hash.txt /usr/share/wordlists/rockyou.txt"
+    echo "NTLM: hashcat -m 1000 hash.txt /usr/share/wordlists/rockyou.txt"
+  elif [[ "$h" =~ ^[A-Fa-f0-9]{40}$ ]]; then
+    echo "Likely SHA1"
+    echo "hashcat -m 100 hash.txt /usr/share/wordlists/rockyou.txt"
+  elif [[ "$h" =~ ^[A-Fa-f0-9]{64}$ ]]; then
+    echo "Likely SHA256"
+    echo "hashcat -m 1400 hash.txt /usr/share/wordlists/rockyou.txt"
+  else
+    echo "Unknown from pattern alone. Use context plus hashid/name-that-hash manually."
+  fi
+}
+
 log_hash() {
   local entry="$*"
   [[ -n "$entry" ]] || die "hash needs the hash text"
@@ -280,6 +381,8 @@ log_hash() {
   echo "$(date +"%Y-%m-%d %H:%M") - $entry" >> "$HASHES_FILE"
   ok "Hash logged to $HASHES_FILE"
   note "Hash logged ($(printf '%s' "$entry" | head -c 40)...)"
+  echo
+  guess_hash_type "$entry"
 }
 
 confirm_scope() {
@@ -336,6 +439,20 @@ md_cell() {
   printf '%s\n' "$value"
 }
 
+csv_cell() {
+  local value="${1:-}"
+  value="${value//\"/\"\"}"
+  printf '"%s"' "$value"
+}
+
+ensure_creds_csv() {
+  mkdir -p "$CREDS_DIR"
+  if [[ ! -f "$CREDS_CSV" ]]; then
+    echo 'time,service,user,password_or_hash,source,tested,notes' > "$CREDS_CSV"
+    chmod 600 "$CREDS_CSV"
+  fi
+}
+
 has_tcp_port() {
   local ports="${1:-}"
   local needle="${2:?port required}"
@@ -377,6 +494,7 @@ Discovery and scanning:
 
 Service enumeration:
   ./scripts/oscp.sh enum-all [IP]              # service enum based on nmap-full
+  ./scripts/oscp.sh suggest [IP]               # print next manual checks
   ./scripts/oscp.sh enum-web <IP> <PORT> [DOMAIN]
   ./scripts/oscp.sh web-all [IP] [DOMAIN]
   ./scripts/oscp.sh enum-smb <IP>
@@ -389,6 +507,12 @@ Service enumeration:
 
 Workflow helpers:
   ./scripts/oscp.sh quick [IP]                 # nmap-full, nmap-deep, enum-all
+  ./scripts/oscp.sh ad [IP]                    # AD command blocks/checklist
+  ./scripts/oscp.sh loot-linux                 # Linux post-shell checklist
+  ./scripts/oscp.sh loot-windows               # Windows post-shell checklist
+  ./scripts/oscp.sh proof [local|proof]        # proof screenshot/checklist file
+  ./scripts/oscp.sh stuck                      # anti-tunnel-vision checklist
+  ./scripts/oscp.sh score                      # scoring tracker template
   ./scripts/oscp.sh serve [PORT]               # HTTP server from transfer/
   ./scripts/oscp.sh listener <PORT>            # nc listener, rlwrap if present
   ./scripts/oscp.sh loot-search <TERM>
@@ -397,7 +521,9 @@ Workflow helpers:
 Logging:
   ./scripts/oscp.sh note "message"
   ./scripts/oscp.sh cred "user:pass (source)"
-  ./scripts/oscp.sh hash "<hash> (type/source)"
+  ./scripts/oscp.sh add-cred SERVICE USER PASS_OR_HASH [SOURCE]
+  ./scripts/oscp.sh hash "<hash> (type/source)"       # log and suggest crack mode
+  ./scripts/oscp.sh hash-guess "<hash>"               # suggest crack mode only
 
 Environment:
   .oscp_env supports OSCP_TARGET, OSCP_SUBNET, OSCP_DOMAIN, OSCP_WORDLIST,
@@ -821,6 +947,421 @@ enum_all() {
   ok "Enum-all complete"
 }
 
+latest_deep_scan_for() {
+  local target="${1:?target required}"
+  ls -t "$NMAP_DIR/${target}_deep_"*.nmap 2>/dev/null | head -n 1 || true
+}
+
+suggest_next() {
+  local target ports port deep_scan
+  target="$(target_or_default "${1:-}")"
+  ports="$(get_ports_for_target "$target" || true)"
+  [[ -n "$ports" ]] || die "No saved port list for $target. Run nmap-full first."
+  deep_scan="$(latest_deep_scan_for "$target")"
+
+  echo "============================================================"
+  echo " Service-Based Next Actions"
+  echo "============================================================"
+  echo "Target: $target"
+  echo "Open TCP ports: $ports"
+  echo
+
+  if [[ -n "$deep_scan" ]]; then
+    echo "[OPEN SERVICE LINES]"
+    grep -E "^[0-9]+/tcp[[:space:]]+open" "$deep_scan" || true
+    echo
+  else
+    echo "[SCAN]"
+    echo "Run deep scan before trusting service guesses:"
+    echo "  ./scripts/oscp.sh nmap-deep $target"
+    echo
+  fi
+
+  local -a web_ports=()
+  while IFS= read -r port; do
+    is_web_port "$port" && web_ports+=("$port")
+  done < <(ports_as_lines "$ports")
+
+  if (( ${#web_ports[@]} > 0 )); then
+    echo "[WEB]"
+    echo "Run:"
+    for port in "${web_ports[@]}"; do
+      echo "  ./scripts/oscp.sh enum-web $target $port"
+    done
+    cat <<'EOF'
+Manual checks:
+  - View source, robots.txt, sitemap.xml
+  - Login pages, default creds, reset flows
+  - Upload forms and extension bypass
+  - LFI/path traversal and command injection checks
+  - Manual SQL injection checks only
+  - Backup/source disclosure: .bak .old .zip .tar.gz ~ .conf .config
+  - CMS/version-specific research
+Reminder: do not use SQLmap during the exam.
+
+EOF
+  fi
+
+  if has_tcp_port "$ports" 445 || has_tcp_port "$ports" 139; then
+    cat <<EOF
+[SMB]
+Run:
+  ./scripts/oscp.sh enum-smb $target
+Manual checks:
+  - Null session and guest access
+  - Readable shares and recursive downloads
+  - Usernames in filenames or documents
+  - Passwords in configs, scripts, backups, and Office files
+  - Reuse every credential you find
+
+EOF
+  fi
+
+  if has_tcp_port "$ports" 21; then
+    cat <<EOF
+[FTP]
+Run:
+  ./scripts/oscp.sh enum-ftp $target 21
+Manual checks:
+  ftp $target
+  anonymous : anonymous
+  anonymous : anonymous@
+Look for writable directories, web-root overlap, configs, backups, and usernames.
+
+EOF
+  fi
+
+  if has_tcp_port "$ports" 22 || has_tcp_port "$ports" 2222; then
+    cat <<'EOF'
+[SSH]
+Low priority for initial access unless you have creds or a key.
+Use later for stable shells, tunneling, and credential reuse.
+
+EOF
+  fi
+
+  if has_tcp_port "$ports" 25; then
+    cat <<EOF
+[SMTP]
+Possible user enum:
+  smtp-user-enum -M VRFY -U users.txt -t $target
+
+EOF
+  fi
+
+  if has_tcp_port "$ports" 53; then
+    cat <<EOF
+[DNS]
+Try zone transfer if you know or can infer a domain:
+  dig axfr @$target domain.local
+  dig axfr @$target domain.htb
+
+EOF
+  fi
+
+  if has_tcp_port "$ports" 88 || has_tcp_port "$ports" 389 || has_tcp_port "$ports" 636 || has_tcp_port "$ports" 3268 || has_tcp_port "$ports" 3269; then
+    cat <<EOF
+[ACTIVE DIRECTORY INDICATOR]
+Run:
+  ./scripts/oscp.sh ad $target
+Look for domain name, users, shares, SPNs, AS-REP roastable users, reused creds, and BloodHound paths once you have creds.
+
+EOF
+  fi
+
+  if has_tcp_port "$ports" 5985 || has_tcp_port "$ports" 5986; then
+    cat <<EOF
+[WINRM]
+Run:
+  ./scripts/oscp.sh enum-winrm $target
+Use after creds:
+  evil-winrm -i $target -u USER -p 'PASS'
+  evil-winrm -i $target -u USER -H NTLM_HASH
+
+EOF
+  fi
+
+  if has_tcp_port "$ports" 3306 || has_tcp_port "$ports" 5432 || has_tcp_port "$ports" 1433; then
+    cat <<EOF
+[DATABASE]
+Check for default creds only when justified by the service and scope.
+Prioritize web/app config leaks before guessing database passwords.
+
+EOF
+  fi
+
+  cat <<'EOF'
+[STUCK RULE]
+If you spend 15 minutes on the same idea, change approach.
+If you spend 2+ hours on one box with no meaningful progress, move on.
+Run:
+  ./scripts/oscp.sh stuck
+EOF
+}
+
+ad_helper() {
+  load_env_file
+  local target="${1:-${OSCP_TARGET:-TARGET}}"
+  if [[ "$target" != "TARGET" ]]; then
+    require_ipv4 "$target" "AD target"
+  fi
+  mkdir -p "$AD_DIR"
+
+  cat <<EOF
+[AD ENUMERATION STARTERS]
+
+Confirm domain:
+  ldapsearch -x -H ldap://$target -s base namingContexts defaultNamingContext dnsHostName
+
+With creds:
+  netexec smb $target -u USER -p 'PASS'
+  netexec smb $target -u USER -p 'PASS' --shares
+  netexec smb $target -u USER -p 'PASS' --users
+  netexec smb $target -u USER -p 'PASS' --groups
+
+Kerberoast:
+  impacket-GetUserSPNs DOMAIN/USER:'PASS' -dc-ip $target -request -outputfile ad/kerberoast.txt
+  hashcat -m 13100 ad/kerberoast.txt /usr/share/wordlists/rockyou.txt
+
+AS-REP roast:
+  impacket-GetNPUsers DOMAIN/ -usersfile users.txt -dc-ip $target -format hashcat -outputfile ad/asrep.txt
+  hashcat -m 18200 ad/asrep.txt /usr/share/wordlists/rockyou.txt
+
+BloodHound collection after creds:
+  bloodhound-python -u USER -p 'PASS' -d DOMAIN -c All -ns $target
+
+WinRM:
+  evil-winrm -i $target -u USER -p 'PASS'
+  evil-winrm -i $target -u USER -H NTLM_HASH
+
+Pass-the-hash:
+  netexec smb TARGET -u USER -H NTLM_HASH
+  impacket-wmiexec -hashes :NTLM_HASH DOMAIN/USER@TARGET
+
+[REMINDERS]
+- This helper prints commands; it does not choose or execute an attack path.
+- Track AD machine points from the live exam control panel and current official guide.
+EOF
+}
+
+loot_linux() {
+  cat <<'EOF'
+[PASTE ON LINUX TARGET AFTER SHELL]
+
+Basic:
+  id; whoami; hostname; cat /etc/os-release
+  ip a
+  sudo -l
+
+Credential hunting:
+  grep -RiE "pass|passwd|password|pwd|secret|token|key" /var/www /opt /srv /home 2>/dev/null
+  find / -name "wp-config.php" 2>/dev/null
+  find / -name ".env" 2>/dev/null
+  find / -name "config.php" 2>/dev/null
+  find / -name "settings.py" 2>/dev/null
+  find / -name "database.yml" 2>/dev/null
+
+History and SSH:
+  cat ~/.bash_history 2>/dev/null
+  cat /home/*/.bash_history 2>/dev/null
+  find / -name "id_rsa*" 2>/dev/null
+  find / -name "authorized_keys" 2>/dev/null
+  ls -la /home/*/.ssh/ 2>/dev/null
+
+Backups:
+  find / -name "*.bak" 2>/dev/null
+  find / -name "*.old" 2>/dev/null
+  find / -name "*.swp" 2>/dev/null
+  find / -name "*~" 2>/dev/null
+  find / -name "*.zip" 2>/dev/null
+  find / -name "*.tar.gz" 2>/dev/null
+
+Privilege escalation:
+  find / -perm -4000 -ls 2>/dev/null
+  getcap -r / 2>/dev/null
+  cat /etc/crontab
+  ls -la /etc/cron*
+  find / -writable -type f 2>/dev/null
+  cat /etc/passwd | grep sh$
+  ps aux
+  ss -tulpen
+
+Priority: creds > sudo -l > SUID/caps > cron > writable files > kernel exploit last.
+EOF
+}
+
+loot_windows() {
+  cat <<'EOF'
+[PASTE ON WINDOWS TARGET AFTER SHELL]
+
+Basic:
+  whoami
+  whoami /all
+  whoami /priv
+  hostname
+  ipconfig /all
+  systeminfo
+  net user
+  net localgroup administrators
+
+Credential hunting:
+  cmdkey /list
+  dir /s /b *pass* *cred* *vnc* *.config *.kdbx 2>nul
+  dir /s /b web.config 2>nul
+  dir /s /b unattend.xml unattended.xml sysprep.inf sysprep.xml 2>nul
+
+PowerShell history:
+  type %APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt
+
+Services:
+  wmic service get name,displayname,pathname,startmode | findstr /i "auto" | findstr /i /v "C:\Windows"
+
+AlwaysInstallElevated:
+  reg query HKCU\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated
+  reg query HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated
+
+Scheduled tasks and network:
+  schtasks /query /fo LIST /v
+  netstat -ano
+
+Notes: check saved creds before noisy paths. SeImpersonatePrivilege or writable service paths may matter.
+EOF
+}
+
+proof_helper() {
+  load_env_file
+  local type="${1:-local}"
+  case "$type" in
+    local|proof) ;;
+    *) die "usage: proof [local|proof]" ;;
+  esac
+
+  mkdir -p "$PROOF_DIR"
+  local outfile="$PROOF_DIR/${type}_proof_instructions_$(ts).md"
+  cat > "$outfile" <<EOF
+# ${type}.txt Proof Checklist
+
+Target: ${OSCP_TARGET:-<target>}
+Workspace: $ROOT_DIR
+
+## Linux interactive shell proof
+
+\`\`\`bash
+pwd
+cat ${type}.txt
+whoami
+hostname
+ip a
+\`\`\`
+
+## Windows interactive shell proof
+
+\`\`\`cmd
+cd
+type ${type}.txt
+whoami
+hostname
+ipconfig
+\`\`\`
+
+## Required actions
+
+- [ ] Submit the flag in the control panel before exam end.
+- [ ] Capture an interactive shell screenshot, not only a web shell.
+- [ ] Make sure the screenshot shows flag content and target IP context.
+- [ ] Save screenshot in screenshots/.
+- [ ] Add exact commands to notes/report.
+
+Suggested capture:
+
+\`\`\`bash
+./scripts/oscp.sh screenshot "${type} proof with ip visible"
+\`\`\`
+EOF
+
+  note "Created $type proof checklist -> ${outfile#$ROOT_DIR/}"
+  ok "Wrote: $outfile"
+  echo "Proof must come from an interactive shell where required by the live guide."
+}
+
+stuck_helper() {
+  load_env_file
+  cat <<EOF
+[STOP TUNNEL VISION]
+
+Current target: ${OSCP_TARGET:-<not set>}
+
+1. Re-read the deep scan line by line.
+2. Did you check every open port?
+3. Did you run UDP top ports where time allows?
+4. Did you inspect source, robots.txt, sitemap.xml?
+5. Did you run small and medium web discovery or equivalent?
+6. Did you try extensions: php, txt, bak, old, zip, conf, config?
+7. Did you try SMB null and guest?
+8. Did you search exact service versions?
+9. Did you try every found credential everywhere?
+10. Did you look for usernames?
+11. Did you check internal-only services after shell?
+12. Did you check configs before kernel exploits?
+13. Did you take notes good enough for the report?
+
+[15-MINUTE RULE]
+If you have spent 15 minutes on the same idea, change approach.
+
+[2-HOUR RULE]
+If you have spent 2+ hours on this box with no useful progress, move on.
+EOF
+}
+
+ensure_scoring_file() {
+  if [[ -f "$SCORING_FILE" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$SCORING_FILE")"
+  cat > "$SCORING_FILE" <<'EOF'
+# Score Tracker
+
+Use the exam control panel and current official guide as the source of truth.
+This file is a default OSCP+ tracker template, not an authority on live rules.
+
+## Standalone 1
+
+- [ ] local.txt - 10
+- [ ] proof.txt - 10
+
+## Standalone 2
+
+- [ ] local.txt - 10
+- [ ] proof.txt - 10
+
+## Standalone 3
+
+- [ ] local.txt - 10
+- [ ] proof.txt - 10
+
+## AD
+
+- [ ] machine #1 - 10
+- [ ] machine #2 - 10
+- [ ] machine #3 - 20
+
+## Total
+
+- Current points:
+- Passing target: 70/100
+- Control panel checked:
+EOF
+}
+
+score_helper() {
+  ensure_scoring_file
+  cat "$SCORING_FILE"
+  echo
+  echo "[TRACKING FILE]"
+  echo "$SCORING_FILE"
+}
+
 quick() {
   local target
   target="$(target_or_default "${1:-}")"
@@ -1035,6 +1576,7 @@ case "$cmd" in
   nmap-vuln) shift; nmap_vuln "${1:-}" ;;
   ports) shift; show_ports "${1:-}" ;;
   enum-all) shift; enum_all "${1:-}" ;;
+  suggest) shift; suggest_next "${1:-}" ;;
   enum-web|web-triage) shift; web_triage "${1:-}" "${2:-}" "${3:-}" ;;
   web-all) shift; web_all "${1:-}" "${2:-}" ;;
   enum-smb) shift; enum_smb "${1:-}" ;;
@@ -1045,6 +1587,12 @@ case "$cmd" in
   enum-snmp) shift; enum_snmp "${1:-}" ;;
   enum-winrm) shift; enum_winrm "${1:-}" ;;
   quick) shift; quick "${1:-}" ;;
+  ad) shift; ad_helper "${1:-}" ;;
+  loot-linux) shift; loot_linux ;;
+  loot-windows) shift; loot_windows ;;
+  proof) shift; proof_helper "${1:-local}" ;;
+  stuck) shift; stuck_helper ;;
+  score) shift; score_helper ;;
   serve) shift; serve "${1:-8000}" ;;
   listener) shift; listener "${1:-}" ;;
   loot-search) shift; loot_search "$*" ;;
@@ -1053,7 +1601,9 @@ case "$cmd" in
   status) shift; status ;;
   note) shift; note "$*" ;;
   cred) shift; cred "$*" ;;
+  add-cred) shift; add_cred_structured "${1:-}" "${2:-}" "${3:-}" "${4:-manual}" ;;
   hash) shift; log_hash "$*" ;;
+  hash-guess) shift; guess_hash_type "$*" ;;
   -h|--help|"") usage ;;
   *) echo "[-] Unknown command: $cmd"; usage; exit 1 ;;
 esac

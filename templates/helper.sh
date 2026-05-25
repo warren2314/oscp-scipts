@@ -152,6 +152,16 @@ draw_menu() {
    27) Custom oscp.sh command
    28) Shell in workspace root
 
+  ${BOLD}BUDDY HELPERS${RESET}
+   29) Suggest next manual checks
+   30) Log structured credential
+   31) AD command block
+   32) Linux post-shell checklist
+   33) Windows post-shell checklist
+   34) Proof checklist
+   35) Stuck checklist
+   36) Score tracker
+
     q) Quit
 MENU
 }
@@ -275,6 +285,13 @@ action_quick() {
   "$OSCP" quick "$ip"
 }
 
+action_suggest() {
+  local ip
+  ip="$(target_prompt)"
+  [[ -z "$ip" ]] && { echo "${RED}[-] No IP.${RESET}"; return; }
+  "$OSCP" suggest "$ip"
+}
+
 action_note() {
   local msg
   msg="$(prompt "Note" "")"
@@ -288,6 +305,16 @@ action_cred() {
   entry="$(prompt "Credential" "")"
   [[ -z "$entry" ]] && { echo "${RED}[-] Empty credential skipped.${RESET}"; return; }
   "$OSCP" cred "$entry"
+}
+
+action_add_cred() {
+  local service user secret source
+  service="$(prompt "Service" "smb")"
+  user="$(prompt "Username" "")"
+  secret="$(prompt "Password or hash" "")"
+  source="$(prompt "Source" "manual")"
+  [[ -z "$service" || -z "$user" || -z "$secret" ]] && { echo "${RED}[-] Service, username, and secret are required.${RESET}"; return; }
+  "$OSCP" add-cred "$service" "$user" "$secret" "$source"
 }
 
 action_hash() {
@@ -317,6 +344,25 @@ action_screenshot() {
   [[ -z "$mode" ]] && mode="full"
   OSCP_SCREENSHOT_MODE="$mode" "$OSCP" screenshot "$label" "$ip"
 }
+
+action_ad() {
+  local ip
+  ip="$(target_prompt)"
+  [[ -z "$ip" ]] && ip="TARGET"
+  "$OSCP" ad "$ip"
+}
+
+action_loot_linux() { "$OSCP" loot-linux; }
+action_loot_windows() { "$OSCP" loot-windows; }
+
+action_proof() {
+  local type
+  type="$(prompt "Proof type: local or proof" "local")"
+  "$OSCP" proof "$type"
+}
+
+action_stuck() { "$OSCP" stuck; }
+action_score() { "$OSCP" score; }
 
 action_serve() {
   local port
@@ -387,6 +433,14 @@ while true; do
     26) action_loot_search ;;
     27) action_custom ;;
     28) action_shell ;;
+    29) action_suggest ;;
+    30) action_add_cred ;;
+    31) action_ad ;;
+    32) action_loot_linux ;;
+    33) action_loot_windows ;;
+    34) action_proof ;;
+    35) action_stuck ;;
+    36) action_score ;;
     q|Q|"") echo "bye."; exit 0 ;;
     *) echo "${RED}[-] Unknown option: $choice${RESET}" ;;
   esac
