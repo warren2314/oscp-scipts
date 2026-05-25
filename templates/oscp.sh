@@ -8,6 +8,7 @@
 set -euo pipefail
 umask 077
 
+TOOLKIT_VERSION="2026.05.25-buddy"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCANS_DIR="$ROOT_DIR/scans"
 DISC_DIR="$SCANS_DIR/discovery"
@@ -477,6 +478,9 @@ url_for_port() {
 usage() {
   cat <<'USAGE'
 oscp.sh - OSCP workspace runner
+
+Version:
+  $TOOLKIT_VERSION
 
 Setup:
   ./scripts/oscp.sh set-target <IP> [CIDR]
@@ -1531,6 +1535,7 @@ status() {
   load_env_file
   echo "============================================"
   echo " Workspace : $ROOT_DIR"
+  echo " Version   : $TOOLKIT_VERSION"
   echo " Target    : ${OSCP_TARGET:-<not set>}"
   echo " Subnet    : ${OSCP_SUBNET:-<not set>}"
   echo " Domain    : ${OSCP_DOMAIN:-<not set>}"

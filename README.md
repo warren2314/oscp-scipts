@@ -21,6 +21,22 @@ Install missing apt packages after review:
 ./install_oscp_toolkit.sh --install-missing
 ```
 
+## Refresh an Existing Workspace
+
+Workspaces contain copied scripts under `./scripts/`. If you update the toolkit after creating a workspace, refresh that workspace:
+
+```bash
+oscp-refresh /path/to/workspace
+```
+
+Or without the alias:
+
+```bash
+~/oscp-toolkit/refresh_workspace.sh /path/to/workspace
+```
+
+The refresh keeps a backup in `scripts/.backup_<timestamp>/`.
+
 ## Create a Workspace
 
 ```bash

@@ -49,6 +49,7 @@ require_source_file() {
 
 copy_toolkit() {
   require_source_file "init_oscp.sh"
+  require_source_file "refresh_workspace.sh"
   require_source_file "templates/oscp.sh"
   require_source_file "templates/cmds.sh"
   require_source_file "templates/helper.sh"
@@ -57,6 +58,7 @@ copy_toolkit() {
   mkdir -p "$INSTALL_DIR/templates"
 
   install -m 0755 "$SRC_DIR/init_oscp.sh" "$INSTALL_DIR/init_oscp.sh"
+  install -m 0755 "$SRC_DIR/refresh_workspace.sh" "$INSTALL_DIR/refresh_workspace.sh"
   install -m 0755 "$SRC_DIR/templates/oscp.sh" "$INSTALL_DIR/templates/oscp.sh"
   install -m 0755 "$SRC_DIR/templates/cmds.sh" "$INSTALL_DIR/templates/cmds.sh"
   install -m 0755 "$SRC_DIR/templates/helper.sh" "$INSTALL_DIR/templates/helper.sh"
@@ -69,6 +71,7 @@ copy_toolkit() {
 
   if [[ "$ADD_ALIAS" -eq 1 ]]; then
     local alias_line="alias oscp-init='${INSTALL_DIR}/init_oscp.sh'"
+    local refresh_alias_line="alias oscp-refresh='${INSTALL_DIR}/refresh_workspace.sh'"
     local rc
     for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
       [[ -f "$rc" ]] || continue
@@ -80,8 +83,17 @@ copy_toolkit() {
         } >> "$rc"
         echo "[+] Added alias to $rc"
       fi
+      if ! grep -qF "$refresh_alias_line" "$rc"; then
+        {
+          echo ""
+          echo "# OSCP toolkit workspace refresh"
+          echo "$refresh_alias_line"
+        } >> "$rc"
+        echo "[+] Added refresh alias to $rc"
+      fi
     done
     echo "[*] New terminal command: oscp-init -n boxname -t <ip>"
+    echo "[*] Refresh an old workspace: oscp-refresh /path/to/workspace"
   fi
 }
 

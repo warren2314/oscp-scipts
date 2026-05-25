@@ -7,6 +7,7 @@
 set -uo pipefail
 umask 077
 
+TOOLKIT_VERSION="2026.05.25-buddy"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OSCP="$SCRIPT_DIR/oscp.sh"
@@ -95,7 +96,7 @@ draw_header() {
   # VPN/scanner output showing through the menu on translucent terminals.
   printf '\033[H\033[2J\033[3J'
   echo "${CYAN}${BOLD}============================================================${RESET}"
-  echo "${CYAN}${BOLD}  OSCP Helper${RESET}     ${DIM}workspace: $(basename "$ROOT_DIR")${RESET}"
+  echo "${CYAN}${BOLD}  OSCP Helper v${TOOLKIT_VERSION}${RESET}     ${DIM}workspace: $(basename "$ROOT_DIR")${RESET}"
   echo "${CYAN}${BOLD}============================================================${RESET}"
 
   printf "  Target : %s\n" "${OSCP_TARGET:-${RED}<not set>${RESET}}"
