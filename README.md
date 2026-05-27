@@ -88,6 +88,8 @@ Web enumeration saves HTTP headers, WhatWeb output, Nikto checks when installed,
 ./scripts/oscp.sh nmap-udp
 ./scripts/oscp.sh loot-linux
 ./scripts/oscp.sh loot-windows
+./scripts/oscp.sh win-privs
+./scripts/oscp.sh win-privs privesc/windows/whoami_priv.txt
 ./scripts/oscp.sh proof local
 ./scripts/oscp.sh stuck
 ./scripts/oscp.sh score
@@ -117,6 +119,7 @@ These commands are intentionally decision-support helpers. They print manual che
 ./scripts/oscp.sh ad
 ./scripts/oscp.sh loot-linux
 ./scripts/oscp.sh loot-windows
+./scripts/oscp.sh win-privs
 ./scripts/oscp.sh proof proof
 ./scripts/oscp.sh stuck
 ./scripts/oscp.sh score

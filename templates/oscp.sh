@@ -8,7 +8,7 @@
 set -euo pipefail
 umask 077
 
-TOOLKIT_VERSION="2026.05.25-buddy"
+TOOLKIT_VERSION="2026.05.27-buddy"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCANS_DIR="$ROOT_DIR/scans"
 DISC_DIR="$SCANS_DIR/discovery"
@@ -514,6 +514,7 @@ Workflow helpers:
   ./scripts/oscp.sh ad [IP]                    # AD command blocks/checklist
   ./scripts/oscp.sh loot-linux                 # Linux post-shell checklist
   ./scripts/oscp.sh loot-windows               # Windows post-shell checklist
+  ./scripts/oscp.sh win-privs [FILE]           # whoami /priv triage and parser
   ./scripts/oscp.sh proof [local|proof]        # proof screenshot/checklist file
   ./scripts/oscp.sh stuck                      # anti-tunnel-vision checklist
   ./scripts/oscp.sh score                      # scoring tracker template
@@ -1228,8 +1229,117 @@ Scheduled tasks and network:
   schtasks /query /fo LIST /v
   netstat -ano
 
-Notes: check saved creds before noisy paths. SeImpersonatePrivilege or writable service paths may matter.
+Privilege triage:
+  whoami /priv
+  # Save the output locally, then run:
+  ./scripts/oscp.sh win-privs privesc/windows/whoami_priv.txt
+
+Notes: check saved creds before noisy paths. Run win-privs before chasing Windows privesc guesses.
 EOF
+}
+
+win_privs() {
+  local file="${1:-}"
+
+  cat <<'EOF'
+[WINDOWS WHOAMI /PRIV TRIAGE]
+
+Capture on the target:
+  whoami
+  whoami /groups
+  whoami /priv
+  whoami /all
+
+Save clean text when possible:
+  whoami /priv > %TEMP%\whoami_priv.txt
+  powershell -c "whoami /priv | Out-File -Encoding ascii $env:TEMP\whoami_priv.txt"
+
+How to read it:
+  - Enabled means usable in the current token.
+  - Disabled can still matter; assigned privileges are often enableable through the right API/tooling.
+  - Missing means the account does not hold that privilege.
+  - SeChangeNotifyPrivilege is normal on almost every user. Ignore it by itself.
+  - The parser strips NUL/CR bytes, so UTF-16 PowerShell output usually still works.
+
+Highest-value privileges:
+  SeImpersonatePrivilege        HIGH      Service/web context token impersonation path.
+  SeAssignPrimaryTokenPrivilege HIGH      Often pairs with token impersonation from service accounts.
+  SeBackupPrivilege             HIGH      Read protected files and registry hives.
+  SeRestorePrivilege            HIGH      Restore/overwrite protected files when paired with a path.
+  SeDebugPrivilege              HIGH      Inspect privileged process memory; check rules before dumping creds.
+  SeTakeOwnershipPrivilege      MED-HIGH  Take ownership, then change ACLs on files/services.
+  SeManageVolumePrivilege       MED-HIGH  Volume/file write abuse paths; investigate carefully.
+  SeLoadDriverPrivilege         MED-HIGH  Driver loading path; usually noisier and more fragile.
+
+Rare but serious:
+  SeCreateTokenPrivilege        CRITICAL  Create arbitrary tokens; uncommon but high impact.
+  SeTcbPrivilege                CRITICAL  Act as part of the OS; uncommon but high impact.
+  SeTrustedCredManAccessPrivilege HIGH    Credential Manager access path.
+  SeEnableDelegationPrivilege   HIGH      AD delegation abuse path.
+
+Usually low priority alone:
+  SeChangeNotifyPrivilege       Normal    Traverse checking; expected on normal users.
+  SeShutdownPrivilege           Low       Not a privesc path by itself.
+  SeTimeZonePrivilege           Low       Not a privesc path by itself.
+  SeIncreaseWorkingSetPrivilege Low       Not a privesc path by itself.
+  SeUndockPrivilege             Low       Not a privesc path by itself.
+
+Decision flow:
+  1. Service account plus SeImpersonate/SeAssignPrimaryToken: investigate token impersonation first.
+  2. Backup/Restore/TakeOwnership: look for protected files, registry hives, service binaries, and ACL paths.
+  3. Debug/TrustedCredManAccess: treat as credential-access potential and verify exam/lab rules.
+  4. No useful privilege: move to saved creds, services, scheduled tasks, writable directories, and software versions.
+
+Also check:
+  whoami /groups
+  net localgroup administrators
+  net localgroup "Remote Management Users"
+  net localgroup "Backup Operators"
+  net localgroup "Remote Desktop Users"
+EOF
+
+  [[ -z "$file" ]] && return 0
+  [[ -r "$file" ]] || die "Cannot read whoami /priv output file: $file"
+
+  echo
+  echo "[MATCHES IN $file]"
+  printf '  %-34s %-10s %-9s %s\n' "Privilege" "State" "Priority" "Why it matters"
+  printf '  %-34s %-10s %-9s %s\n' "---------" "-----" "--------" "--------------"
+
+  local found=0 priv priority cue line state
+  while IFS='|' read -r priv priority cue; do
+    if grep -qiE "^[[:space:]]*${priv}[[:space:]]" < <(tr -d '\000\r' < "$file"); then
+      line="$(tr -d '\000\r' < "$file" | grep -iE "^[[:space:]]*${priv}[[:space:]]" | head -n 1 | tr -s '[:space:]' ' ')"
+      case "$line" in
+        *Enabled*) state="enabled" ;;
+        *Disabled*) state="disabled" ;;
+        *) state="present" ;;
+      esac
+      printf '  %-34s %-10s %-9s %s\n' "$priv" "$state" "$priority" "$cue"
+      found=1
+    fi
+  done <<'EOF'
+SeImpersonatePrivilege|HIGH|Token impersonation path, especially service/web shells.
+SeAssignPrimaryTokenPrivilege|HIGH|Token abuse path, often useful with SeImpersonate.
+SeBackupPrivilege|HIGH|Protected file and registry hive reads.
+SeRestorePrivilege|HIGH|Protected file overwrite/restore path.
+SeDebugPrivilege|HIGH|Privileged process access and credential exposure potential.
+SeTakeOwnershipPrivilege|MED-HIGH|Take ownership, then modify ACLs.
+SeManageVolumePrivilege|MED-HIGH|Volume/file write abuse paths.
+SeLoadDriverPrivilege|MED-HIGH|Driver loading path, usually noisier.
+SeCreateTokenPrivilege|CRITICAL|Arbitrary token creation potential.
+SeTcbPrivilege|CRITICAL|Act as part of the operating system.
+SeTrustedCredManAccessPrivilege|HIGH|Credential Manager access path.
+SeEnableDelegationPrivilege|HIGH|AD delegation abuse path.
+EOF
+
+  if grep -qiE '^[[:space:]]*SeChangeNotifyPrivilege[[:space:]]' < <(tr -d '\000\r' < "$file"); then
+    printf '  %-34s %-10s %-9s %s\n' "SeChangeNotifyPrivilege" "normal" "LOW" "Expected on most users; ignore by itself."
+  fi
+
+  if [[ "$found" -eq 0 ]]; then
+    echo "  No priority privileges matched. Shift to creds, services, tasks, ACLs, and installed software."
+  fi
 }
 
 proof_helper() {
@@ -1595,6 +1705,7 @@ case "$cmd" in
   ad) shift; ad_helper "${1:-}" ;;
   loot-linux) shift; loot_linux ;;
   loot-windows) shift; loot_windows ;;
+  win-privs|windows-privs|whoami-privs) shift; win_privs "${1:-}" ;;
   proof) shift; proof_helper "${1:-local}" ;;
   stuck) shift; stuck_helper ;;
   score) shift; score_helper ;;

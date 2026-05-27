@@ -7,7 +7,7 @@
 set -uo pipefail
 umask 077
 
-TOOLKIT_VERSION="2026.05.25-buddy"
+TOOLKIT_VERSION="2026.05.27-buddy"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OSCP="$SCRIPT_DIR/oscp.sh"
@@ -159,9 +159,10 @@ draw_menu() {
    31) AD command block
    32) Linux post-shell checklist
    33) Windows post-shell checklist
-   34) Proof checklist
-   35) Stuck checklist
-   36) Score tracker
+   34) Windows privilege triage
+   35) Proof checklist
+   36) Stuck checklist
+   37) Score tracker
 
     q) Quit
 MENU
@@ -356,6 +357,17 @@ action_ad() {
 action_loot_linux() { "$OSCP" loot-linux; }
 action_loot_windows() { "$OSCP" loot-windows; }
 
+action_win_privs() {
+  local file
+  echo "${DIM}Optional: pass a saved whoami /priv output file to highlight risky privileges.${RESET}"
+  file="$(prompt "whoami /priv file (blank = guide only)" "")"
+  if [[ -n "$file" ]]; then
+    "$OSCP" win-privs "$file"
+  else
+    "$OSCP" win-privs
+  fi
+}
+
 action_proof() {
   local type
   type="$(prompt "Proof type: local or proof" "local")"
@@ -439,9 +451,10 @@ while true; do
     31) action_ad ;;
     32) action_loot_linux ;;
     33) action_loot_windows ;;
-    34) action_proof ;;
-    35) action_stuck ;;
-    36) action_score ;;
+    34) action_win_privs ;;
+    35) action_proof ;;
+    36) action_stuck ;;
+    37) action_score ;;
     q|Q|"") echo "bye."; exit 0 ;;
     *) echo "${RED}[-] Unknown option: $choice${RESET}" ;;
   esac

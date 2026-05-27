@@ -71,7 +71,8 @@ for script in oscp.sh helper.sh cmds.sh; do
   install -m 0755 "$TEMPL_DIR/$script" "$ROOT/scripts/$script"
 done
 
-mkdir -p "$ROOT/ad" "$ROOT/creds" "$ROOT/proof" "$ROOT/notes" "$ROOT/reports" "$ROOT/evidence"
+mkdir -p "$ROOT/ad" "$ROOT/creds" "$ROOT/proof" "$ROOT/notes" "$ROOT/reports" \
+  "$ROOT/evidence" "$ROOT/privesc/linux" "$ROOT/privesc/windows"
 
 if [[ ! -f "$ROOT/creds/creds.csv" ]]; then
   cat > "$ROOT/creds/creds.csv" <<'EOF'

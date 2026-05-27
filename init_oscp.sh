@@ -414,6 +414,8 @@ Common logging:
   ./scripts/oscp.sh cred "bob:Password123 (SMB on 192.168.56.10)"
   ./scripts/oscp.sh add-cred smb bob 'Password123' 'anonymous share config'
   ./scripts/oscp.sh hash "<hash> (source/type)"
+  ./scripts/oscp.sh win-privs
+  ./scripts/oscp.sh win-privs privesc/windows/whoami_priv.txt
   ./scripts/oscp.sh screenshot "proof shell with ip address visible"
   ./scripts/oscp.sh proof local
   ./scripts/oscp.sh stuck
