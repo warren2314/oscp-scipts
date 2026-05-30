@@ -296,6 +296,7 @@ print_health_check() {
   check_any_tool "netexec/cme" "SMB/AD credential checks" "netexec:netexec" "crackmapexec:crackmapexec"
   check_tool impacket-secretsdump python3-impacket "Impacket scripts"
   check_tool ldapsearch ldap-utils "LDAP enumeration"
+  check_tool ldapdomaindump ldapdomaindump "LDAP dump after valid AD creds"
   check_tool evil-winrm evil-winrm "WinRM shell access"
   check_tool responder responder "LLMNR/NBT-NS lab testing"
   check_tool snmpwalk snmp "SNMP enumeration"

@@ -84,7 +84,7 @@ Web enumeration saves HTTP headers, WhatWeb output, Nikto checks when installed,
 ./scripts/oscp.sh web-all
 ./scripts/oscp.sh enum-smb 192.168.56.10
 ./scripts/oscp.sh enum-ldap 192.168.56.10
-./scripts/oscp.sh ad 192.168.56.10
+./scripts/oscp.sh ad 192.168.56.10 corp.local alice 'Password123!'
 ./scripts/oscp.sh nmap-udp
 ./scripts/oscp.sh loot-linux
 ./scripts/oscp.sh loot-windows
@@ -116,9 +116,12 @@ The workspace contains `notes.md`, `notes/`, `reports/findings.md`, `reports/sco
 
 These commands are intentionally decision-support helpers. They print manual checks, command blocks, and reporting reminders; they do not select exploits, brute-force services by default, run SQLmap, or chain exploitation.
 
+The AD helper is built for the presumed-breach start where you are given a domain username and password. In the interactive helper, choose `AD presumed-breach flow`; it prompts for DC IP, domain, username, and password, then prints the ordered validation, SMB/LDAP enumeration, BloodHound, Kerberoast/AS-REP, WinRM, and evidence commands. Leave username or password blank to print placeholders instead.
+
 ```bash
 ./scripts/oscp.sh suggest
 ./scripts/oscp.sh ad
+./scripts/oscp.sh ad 192.168.56.10 corp.local alice 'Password123!'
 ./scripts/oscp.sh loot-linux
 ./scripts/oscp.sh loot-windows
 ./scripts/oscp.sh win-privs
