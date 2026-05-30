@@ -7,7 +7,7 @@
 set -uo pipefail
 umask 077
 
-TOOLKIT_VERSION="2026.05.27-buddy"
+TOOLKIT_VERSION="2026.05.30-tools"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OSCP="$SCRIPT_DIR/oscp.sh"
@@ -163,6 +163,7 @@ draw_menu() {
    35) Proof checklist
    36) Stuck checklist
    37) Score tracker
+   38) Post-shell tool toolbox
 
     q) Quit
 MENU
@@ -377,6 +378,14 @@ action_proof() {
 action_stuck() { "$OSCP" stuck; }
 action_score() { "$OSCP" score; }
 
+action_tools() {
+  local mode
+  echo "${DIM}Modes: all, status, stage, memory, snippets, commands${RESET}"
+  mode="$(prompt "Toolbox mode" "all")"
+  [[ -z "$mode" ]] && mode="all"
+  "$OSCP" tools "$mode"
+}
+
 action_serve() {
   local port
   port="$(prompt "Port" "8000")"
@@ -455,6 +464,7 @@ while true; do
     35) action_proof ;;
     36) action_stuck ;;
     37) action_score ;;
+    38) action_tools ;;
     q|Q|"") echo "bye."; exit 0 ;;
     *) echo "${RED}[-] Unknown option: $choice${RESET}" ;;
   esac

@@ -72,7 +72,7 @@ for script in oscp.sh helper.sh cmds.sh; do
 done
 
 mkdir -p "$ROOT/ad" "$ROOT/creds" "$ROOT/proof" "$ROOT/notes" "$ROOT/reports" \
-  "$ROOT/evidence" "$ROOT/privesc/linux" "$ROOT/privesc/windows"
+  "$ROOT/evidence" "$ROOT/privesc/linux" "$ROOT/privesc/windows" "$ROOT/transfer/tools"
 
 if [[ ! -f "$ROOT/creds/creds.csv" ]]; then
   cat > "$ROOT/creds/creds.csv" <<'EOF'

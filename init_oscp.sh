@@ -131,7 +131,7 @@ mkdir -p \
   "$ROOT/scripts" \
   "$ROOT/output" \
   "$ROOT/reports" \
-  "$ROOT/transfer"
+  "$ROOT/transfer/tools"
 
 touch "$ROOT/hosts.txt" "$ROOT/creds.txt" "$ROOT/todo.txt" "$ROOT/loot/hashes.txt" "$ROOT/commands.log"
 touch "$ROOT/evidence/screenshots.md"
@@ -420,6 +420,7 @@ Common logging:
   ./scripts/oscp.sh proof local
   ./scripts/oscp.sh stuck
   ./scripts/oscp.sh score
+  ./scripts/oscp.sh tools
 
 One-shot baseline:
   ./scripts/cmds.sh

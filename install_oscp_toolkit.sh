@@ -152,6 +152,37 @@ check_any_tool() {
   fi
 }
 
+first_existing_file() {
+  local pattern match
+  for pattern in "$@"; do
+    if [[ -f "$pattern" ]]; then
+      printf '%s\n' "$pattern"
+      return 0
+    fi
+    while IFS= read -r match; do
+      [[ -f "$match" ]] || continue
+      printf '%s\n' "$match"
+      return 0
+    done < <(compgen -G "$pattern" 2>/dev/null || true)
+  done
+  return 1
+}
+
+check_file_any() {
+  local label="${1:?label required}"
+  local why="${2:?reason required}"
+  shift 2
+
+  local found
+  if found="$(first_existing_file "$@")"; then
+    printf " [OK]   %-24s %s\n" "$label" "$why"
+    printf "        %s\n" "$found"
+    present_count=$((present_count + 1))
+  else
+    printf " [HINT] %-24s %s\n" "$label" "$why"
+  fi
+}
+
 unique_packages() {
   local pkg
   local out=()
@@ -208,6 +239,31 @@ print_health_check() {
   check_tool evil-winrm evil-winrm "WinRM shell access"
   check_tool responder responder "LLMNR/NBT-NS lab testing"
   check_tool snmpwalk snmp "SNMP enumeration"
+  check_any_tool "bloodhound" "BloodHound GUI" "bloodhound:bloodhound" "bloodhound-ce:-"
+  check_tool bloodhound-python bloodhound.py "BloodHound collection from Kali"
+  check_file_any "PowerView.ps1" "stageable Windows AD recon script" \
+    /usr/share/windows-resources/powersploit/Recon/PowerView.ps1 \
+    /usr/share/powersploit/Recon/PowerView.ps1 \
+    /opt/PowerSploit/Recon/PowerView.ps1
+  check_file_any "SharpHound" "stageable BloodHound collector" \
+    /usr/share/windows-resources/bloodhound/SharpHound.exe \
+    /usr/lib/bloodhound/resources/app/Collectors/SharpHound.exe \
+    /usr/share/bloodhound/Collectors/SharpHound.exe \
+    /opt/SharpHound*/SharpHound.exe
+  check_file_any "Rubeus.exe" "stageable Kerberos helper" \
+    /usr/share/windows-resources/rubeus/Rubeus.exe \
+    /usr/share/rubeus/Rubeus.exe \
+    /opt/Rubeus*/Rubeus.exe
+  check_file_any "PrintSpoofer.exe" "stageable Windows privilege helper" \
+    /usr/share/windows-resources/PrintSpoofer/PrintSpoofer.exe \
+    /usr/share/windows-resources/PrintSpoofer.exe \
+    /opt/PrintSpoofer*/PrintSpoofer.exe
+  check_file_any "Mimikatz" "sensitive stageable credential tool; opt-in staging only" \
+    /usr/share/windows-resources/mimikatz/x64/mimikatz.exe \
+    /usr/share/mimikatz/x64/mimikatz.exe \
+    /opt/mimikatz*/x64/mimikatz.exe
+  check_any_tool "Empire" "restricted C2-style tooling; verify live rules" "powershell-empire:-" "empire-server:-" "empire:-"
+  check_any_tool "Covenant" "restricted C2-style tooling; verify live rules" "covenant:-" "Covenant:-"
 
   echo "------------------------------------------------------------"
   echo " Passwords / Pivoting"

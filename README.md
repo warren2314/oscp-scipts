@@ -90,6 +90,8 @@ Web enumeration saves HTTP headers, WhatWeb output, Nikto checks when installed,
 ./scripts/oscp.sh loot-windows
 ./scripts/oscp.sh win-privs
 ./scripts/oscp.sh win-privs privesc/windows/whoami_priv.txt
+./scripts/oscp.sh tools
+./scripts/oscp.sh tools stage
 ./scripts/oscp.sh proof local
 ./scripts/oscp.sh stuck
 ./scripts/oscp.sh score
@@ -125,6 +127,26 @@ These commands are intentionally decision-support helpers. They print manual che
 ./scripts/oscp.sh score
 ./scripts/oscp.sh hash-guess '<hash>'
 ```
+
+## Post-Shell Tool Toolbox
+
+The `tools` helper checks common local AD and Windows tooling, stages already-installed Windows-side files into `transfer/tools/`, and prints disk-based fetch/import snippets.
+
+```bash
+./scripts/oscp.sh tools status
+./scripts/oscp.sh tools stage
+./scripts/oscp.sh tools memory
+./scripts/oscp.sh tools commands
+./scripts/oscp.sh serve 8000
+```
+
+It looks for BloodHound, SharpHound, PowerView, Rubeus, evil-winrm, Responder, NetExec/CrackMapExec, Impacket, PrintSpoofer, Empire, Covenant, and Mimikatz in common Kali paths. Mimikatz staging is opt-in:
+
+```bash
+OSCP_STAGE_SENSITIVE=1 ./scripts/oscp.sh tools stage
+```
+
+This helper does not create memory-only download cradles, reflective loaders, or bypasses. The `memory` mode shows local PowerShell import patterns from files already on disk. Use only tools and features allowed by the live exam rules; Responder poisoning/spoofing and C2-style workflows may be restricted.
 
 ## Screenshot Evidence
 
