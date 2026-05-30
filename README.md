@@ -133,6 +133,7 @@ These commands are intentionally decision-support helpers. They print manual che
 The `tools` helper checks common local AD and Windows tooling, stages already-installed Windows-side files into `transfer/tools/`, and prints disk-based fetch/import snippets.
 
 ```bash
+export OSCP_TOOLS_DIR="$HOME/Documents/OffSec/Scripts"
 ./scripts/oscp.sh tools status
 ./scripts/oscp.sh tools stage
 ./scripts/oscp.sh tools memory
@@ -141,6 +142,8 @@ The `tools` helper checks common local AD and Windows tooling, stages already-in
 ```
 
 It looks for BloodHound, SharpHound, PowerView, Rubeus, evil-winrm, Responder, NetExec/CrackMapExec, Impacket, PrintSpoofer, Empire, Covenant, and Mimikatz in common Kali paths. Mimikatz staging is opt-in:
+
+The default search path also includes `~/Documents/OffSec/Scripts` and common subfolders such as `oscp-ad`, `Ghostpack-CompiledBinaries`, `Powershell`, `LinEnum`, and `PSExec`. Use `OSCP_EXTRA_TOOL_DIRS` with colon-separated paths for more locations.
 
 ```bash
 OSCP_STAGE_SENSITIVE=1 ./scripts/oscp.sh tools stage

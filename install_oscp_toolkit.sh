@@ -168,6 +168,65 @@ first_existing_file() {
   return 1
 }
 
+expand_user_path() {
+  local path="${1:-}"
+  case "$path" in
+    "~") path="$HOME" ;;
+    "~/"*) path="$HOME/${path#~/}" ;;
+  esac
+  printf '%s\n' "$path"
+}
+
+tool_search_dirs() {
+  local -a dirs extra_dirs
+  local raw dir seen=" "
+
+  [[ -n "${OSCP_TOOLS_DIR:-}" ]] && dirs+=("$OSCP_TOOLS_DIR")
+  if [[ -n "${OSCP_EXTRA_TOOL_DIRS:-}" ]]; then
+    IFS=':' read -r -a extra_dirs <<< "$OSCP_EXTRA_TOOL_DIRS"
+    dirs+=("${extra_dirs[@]}")
+  fi
+
+  dirs+=(
+    "$HOME/Documents/OffSec/Scripts"
+    "$HOME/Documents/OffSec/Scripts/oscp-ad"
+    "$HOME/Documents/OffSec/Scripts/Ghostpack-CompiledBinaries"
+    "$HOME/Documents/OffSec/Scripts/Powershell"
+    "$HOME/Documents/OffSec/Scripts/PowerShell"
+    "$HOME/Documents/OffSec/Scripts/LinEnum"
+    "$HOME/Documents/OffSec/Scripts/PSExec"
+    "$HOME/tools"
+    "$HOME/Scripts"
+  )
+
+  for raw in "${dirs[@]}"; do
+    [[ -n "$raw" ]] || continue
+    dir="$(expand_user_path "$raw")"
+    [[ -n "$dir" ]] || continue
+    case "$seen" in
+      *" $dir "*) continue ;;
+    esac
+    seen="${seen}${dir} "
+    printf '%s\n' "$dir"
+  done
+}
+
+tool_file_candidates() {
+  local rel dir
+  for rel in "$@"; do
+    case "$rel" in
+      /*|~/*)
+        expand_user_path "$rel"
+        ;;
+      *)
+        while IFS= read -r dir; do
+          printf '%s/%s\n' "$dir" "$rel"
+        done < <(tool_search_dirs)
+        ;;
+    esac
+  done
+}
+
 check_file_any() {
   local label="${1:?label required}"
   local why="${2:?reason required}"
@@ -200,6 +259,7 @@ unique_packages() {
 print_health_check() {
   missing_pkgs=()
   present_count=0
+  local -a candidates
 
   echo "============================================================"
   echo " OSCP TOOL HEALTH CHECK"
@@ -241,24 +301,44 @@ print_health_check() {
   check_tool snmpwalk snmp "SNMP enumeration"
   check_any_tool "bloodhound" "BloodHound GUI" "bloodhound:bloodhound" "bloodhound-ce:-"
   check_tool bloodhound-python bloodhound.py "BloodHound collection from Kali"
+  mapfile -t candidates < <(tool_file_candidates "PowerView.ps1" "oscp-ad/PowerView.ps1" "Powershell/PowerView.ps1" "PowerShell/PowerView.ps1")
   check_file_any "PowerView.ps1" "stageable Windows AD recon script" \
+    "${candidates[@]}" \
     /usr/share/windows-resources/powersploit/Recon/PowerView.ps1 \
     /usr/share/powersploit/Recon/PowerView.ps1 \
     /opt/PowerSploit/Recon/PowerView.ps1
+  mapfile -t candidates < <(tool_file_candidates "FindUserSession.ps1" "oscp-ad/FindUserSession.ps1")
+  check_file_any "FindUserSession.ps1" "stageable Windows AD session helper" "${candidates[@]}"
+  mapfile -t candidates < <(tool_file_candidates "ADAutoEnum.ps1" "oscp-ad/ADAutoEnum.ps1")
+  check_file_any "ADAutoEnum.ps1" "stageable AD enumeration script" "${candidates[@]}"
+  mapfile -t candidates < <(tool_file_candidates "SharpHound.exe" "*SharpHound*.exe" "Collectors/SharpHound.exe" "Ghostpack-CompiledBinaries/*SharpHound*.exe")
   check_file_any "SharpHound" "stageable BloodHound collector" \
+    "${candidates[@]}" \
     /usr/share/windows-resources/bloodhound/SharpHound.exe \
     /usr/lib/bloodhound/resources/app/Collectors/SharpHound.exe \
     /usr/share/bloodhound/Collectors/SharpHound.exe \
     /opt/SharpHound*/SharpHound.exe
+  mapfile -t candidates < <(tool_file_candidates "Rubeus.exe" "*Rubeus*.exe" "Ghostpack-CompiledBinaries/*Rubeus*.exe")
   check_file_any "Rubeus.exe" "stageable Kerberos helper" \
+    "${candidates[@]}" \
     /usr/share/windows-resources/rubeus/Rubeus.exe \
     /usr/share/rubeus/Rubeus.exe \
     /opt/Rubeus*/Rubeus.exe
+  mapfile -t candidates < <(tool_file_candidates "PrintSpoofer.exe" "*PrintSpoofer*.exe")
   check_file_any "PrintSpoofer.exe" "stageable Windows privilege helper" \
+    "${candidates[@]}" \
     /usr/share/windows-resources/PrintSpoofer/PrintSpoofer.exe \
     /usr/share/windows-resources/PrintSpoofer.exe \
     /opt/PrintSpoofer*/PrintSpoofer.exe
+  mapfile -t candidates < <(tool_file_candidates "winPEASx64.exe" "winPEASany.exe" "winPEAS.exe" "winPEAS.ps1" "WinPeasOb.ps1" "winPEAS.ps1.1" "*winPEAS*.exe" "*winPEAS*.ps1")
+  check_file_any "PEAS" "stageable Windows privilege enumeration" "${candidates[@]}"
+  mapfile -t candidates < <(tool_file_candidates "linpeas.sh" "LinEnum.sh" "LinEnum/linenum.sh" "LinEnum/LinEnum.sh" "LinEnum/*.sh")
+  check_file_any "linpeas/LinEnum" "stageable Linux privilege enumeration" "${candidates[@]}"
+  mapfile -t candidates < <(tool_file_candidates "agent.exe" "ligolo-ng_agent*_windows_amd64.zip" "ligolo-ng_proxy*_linux_amd64.tar.gz")
+  check_file_any "Ligolo/agent" "stageable pivot helper files" "${candidates[@]}"
+  mapfile -t candidates < <(tool_file_candidates "mimikatz.exe" "*mimikatz*.exe" "x64/mimikatz.exe")
   check_file_any "Mimikatz" "sensitive stageable credential tool; opt-in staging only" \
+    "${candidates[@]}" \
     /usr/share/windows-resources/mimikatz/x64/mimikatz.exe \
     /usr/share/mimikatz/x64/mimikatz.exe \
     /opt/mimikatz*/x64/mimikatz.exe

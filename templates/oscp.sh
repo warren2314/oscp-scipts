@@ -1493,6 +1493,65 @@ first_existing_file() {
   return 1
 }
 
+expand_user_path() {
+  local path="${1:-}"
+  case "$path" in
+    "~") path="$HOME" ;;
+    "~/"*) path="$HOME/${path#~/}" ;;
+  esac
+  printf '%s\n' "$path"
+}
+
+tool_search_dirs() {
+  local -a dirs extra_dirs
+  local raw dir seen=" "
+
+  [[ -n "${OSCP_TOOLS_DIR:-}" ]] && dirs+=("$OSCP_TOOLS_DIR")
+  if [[ -n "${OSCP_EXTRA_TOOL_DIRS:-}" ]]; then
+    IFS=':' read -r -a extra_dirs <<< "$OSCP_EXTRA_TOOL_DIRS"
+    dirs+=("${extra_dirs[@]}")
+  fi
+
+  dirs+=(
+    "$HOME/Documents/OffSec/Scripts"
+    "$HOME/Documents/OffSec/Scripts/oscp-ad"
+    "$HOME/Documents/OffSec/Scripts/Ghostpack-CompiledBinaries"
+    "$HOME/Documents/OffSec/Scripts/Powershell"
+    "$HOME/Documents/OffSec/Scripts/PowerShell"
+    "$HOME/Documents/OffSec/Scripts/LinEnum"
+    "$HOME/Documents/OffSec/Scripts/PSExec"
+    "$HOME/tools"
+    "$HOME/Scripts"
+  )
+
+  for raw in "${dirs[@]}"; do
+    [[ -n "$raw" ]] || continue
+    dir="$(expand_user_path "$raw")"
+    [[ -n "$dir" ]] || continue
+    case "$seen" in
+      *" $dir "*) continue ;;
+    esac
+    seen="${seen}${dir} "
+    printf '%s\n' "$dir"
+  done
+}
+
+tool_file_candidates() {
+  local rel dir
+  for rel in "$@"; do
+    case "$rel" in
+      /*|~/*)
+        expand_user_path "$rel"
+        ;;
+      *)
+        while IFS= read -r dir; do
+          printf '%s/%s\n' "$dir" "$rel"
+        done < <(tool_search_dirs)
+        ;;
+    esac
+  done
+}
+
 print_cmd_status() {
   local label="${1:?label required}"
   shift
@@ -1517,7 +1576,7 @@ print_file_status() {
     printf ' [OK]   %-28s %s\n' "$label" "$path"
     return 0
   fi
-  printf ' [MISS] %-28s not found in common Kali paths\n' "$label"
+  printf ' [MISS] %-28s not found in tool search paths\n' "$label"
   return 1
 }
 
@@ -1547,6 +1606,8 @@ stage_tool_file() {
 }
 
 tools_status() {
+  local -a candidates
+
   cat <<EOF
 [POST-SHELL TOOL STATUS]
 
@@ -1555,6 +1616,10 @@ Workspace:
 
 Transfer staging:
   $TRANSFER_DIR/tools
+
+Tool search env:
+  OSCP_TOOLS_DIR=${OSCP_TOOLS_DIR:-<unset; defaulting to ~/Documents/OffSec/Scripts>}
+  OSCP_EXTRA_TOOL_DIRS=${OSCP_EXTRA_TOOL_DIRS:-<unset>}
 
 Local operator tools:
 EOF
@@ -1571,33 +1636,61 @@ EOF
   print_cmd_status "Covenant" covenant Covenant || true
 
   echo
+  echo "Existing tool search paths:"
+  while IFS= read -r dir; do
+    [[ -d "$dir" ]] && printf '  %s\n' "$dir"
+  done < <(tool_search_dirs)
+
+  echo
   echo "Stageable Windows-side files:"
-  print_file_status "PowerView.ps1" \
+  mapfile -t candidates < <(tool_file_candidates "PowerView.ps1" "oscp-ad/PowerView.ps1" "Powershell/PowerView.ps1" "PowerShell/PowerView.ps1")
+  print_file_status "PowerView.ps1" "${candidates[@]}" \
     /usr/share/windows-resources/powersploit/Recon/PowerView.ps1 \
     /usr/share/powersploit/Recon/PowerView.ps1 \
     /opt/PowerSploit/Recon/PowerView.ps1 \
     /opt/PowerView*/PowerView.ps1 || true
-  print_file_status "SharpHound.exe" \
+  mapfile -t candidates < <(tool_file_candidates "FindUserSession.ps1" "oscp-ad/FindUserSession.ps1")
+  print_file_status "FindUserSession.ps1" "${candidates[@]}" || true
+  mapfile -t candidates < <(tool_file_candidates "ADAutoEnum.ps1" "oscp-ad/ADAutoEnum.ps1")
+  print_file_status "ADAutoEnum.ps1" "${candidates[@]}" || true
+  mapfile -t candidates < <(tool_file_candidates "SharpHound.exe" "*SharpHound*.exe" "Collectors/SharpHound.exe" "Ghostpack-CompiledBinaries/*SharpHound*.exe")
+  print_file_status "SharpHound.exe" "${candidates[@]}" \
     /usr/share/windows-resources/bloodhound/SharpHound.exe \
     /usr/lib/bloodhound/resources/app/Collectors/SharpHound.exe \
     /usr/share/bloodhound/Collectors/SharpHound.exe \
     /opt/SharpHound*/SharpHound.exe || true
-  print_file_status "SharpHound.ps1" \
+  mapfile -t candidates < <(tool_file_candidates "SharpHound.ps1" "*SharpHound*.ps1" "Collectors/SharpHound.ps1")
+  print_file_status "SharpHound.ps1" "${candidates[@]}" \
     /usr/share/windows-resources/bloodhound/SharpHound.ps1 \
     /usr/lib/bloodhound/resources/app/Collectors/SharpHound.ps1 \
     /usr/share/bloodhound/Collectors/SharpHound.ps1 \
     /opt/SharpHound*/SharpHound.ps1 || true
-  print_file_status "Rubeus.exe" \
+  mapfile -t candidates < <(tool_file_candidates "Rubeus.exe" "*Rubeus*.exe" "Ghostpack-CompiledBinaries/*Rubeus*.exe")
+  print_file_status "Rubeus.exe" "${candidates[@]}" \
     /usr/share/windows-resources/rubeus/Rubeus.exe \
     /usr/share/rubeus/Rubeus.exe \
     /opt/Rubeus/Rubeus.exe \
     /opt/Rubeus*/Rubeus.exe || true
-  print_file_status "PrintSpoofer.exe" \
+  mapfile -t candidates < <(tool_file_candidates "PrintSpoofer.exe" "*PrintSpoofer*.exe")
+  print_file_status "PrintSpoofer.exe" "${candidates[@]}" \
     /usr/share/windows-resources/PrintSpoofer/PrintSpoofer.exe \
     /usr/share/windows-resources/PrintSpoofer.exe \
     /opt/PrintSpoofer/PrintSpoofer.exe \
     /opt/PrintSpoofer*/PrintSpoofer.exe || true
-  print_file_status "Mimikatz x64" \
+  mapfile -t candidates < <(tool_file_candidates "winPEASx64.exe" "winPEASany.exe" "winPEAS.exe" "winPEAS.ps1" "WinPeasOb.ps1" "winPEAS.ps1.1" "*winPEAS*.exe" "*winPEAS*.ps1")
+  print_file_status "PEAS" "${candidates[@]}" || true
+  mapfile -t candidates < <(tool_file_candidates "agent.exe" "ligolo-ng_agent*_windows_amd64.zip" "ligolo-ng_proxy*_linux_amd64.tar.gz" "ligolo*")
+  print_file_status "Ligolo/agent" "${candidates[@]}" || true
+
+  echo
+  echo "Stageable Linux-side files:"
+  mapfile -t candidates < <(tool_file_candidates "linpeas.sh" "LinEnum.sh" "LinEnum/linenum.sh" "LinEnum/LinEnum.sh" "LinEnum/*.sh")
+  print_file_status "linpeas/LinEnum" "${candidates[@]}" || true
+
+  echo
+  echo "Sensitive credential tools:"
+  mapfile -t candidates < <(tool_file_candidates "mimikatz.exe" "*mimikatz*.exe" "x64/mimikatz.exe")
+  print_file_status "Mimikatz x64" "${candidates[@]}" \
     /usr/share/windows-resources/mimikatz/x64/mimikatz.exe \
     /usr/share/mimikatz/x64/mimikatz.exe \
     /opt/mimikatz/x64/mimikatz.exe \
@@ -1614,6 +1707,7 @@ EOF
 
 tools_stage() {
   local stage_dir="$TRANSFER_DIR/tools"
+  local -a candidates
   mkdir -p "$stage_dir"
 
   cat > "$stage_dir/README.txt" <<'EOF'
@@ -1626,34 +1720,66 @@ Use only within your authorised scope and current exam rules.
 Responder poisoning/spoofing and C2-style workflows may be restricted.
 EOF
 
+  mapfile -t candidates < <(tool_file_candidates "PowerView.ps1" "oscp-ad/PowerView.ps1" "Powershell/PowerView.ps1" "PowerShell/PowerView.ps1")
   stage_tool_file "PowerView.ps1" "PowerView.ps1" \
+    "${candidates[@]}" \
     /usr/share/windows-resources/powersploit/Recon/PowerView.ps1 \
     /usr/share/powersploit/Recon/PowerView.ps1 \
     /opt/PowerSploit/Recon/PowerView.ps1 \
     /opt/PowerView*/PowerView.ps1 || true
+  mapfile -t candidates < <(tool_file_candidates "FindUserSession.ps1" "oscp-ad/FindUserSession.ps1")
+  stage_tool_file "FindUserSession.ps1" "FindUserSession.ps1" "${candidates[@]}" || true
+  mapfile -t candidates < <(tool_file_candidates "ADAutoEnum.ps1" "oscp-ad/ADAutoEnum.ps1")
+  stage_tool_file "ADAutoEnum.ps1" "ADAutoEnum.ps1" "${candidates[@]}" || true
+  mapfile -t candidates < <(tool_file_candidates "SharpHound.exe" "*SharpHound*.exe" "Collectors/SharpHound.exe" "Ghostpack-CompiledBinaries/*SharpHound*.exe")
   stage_tool_file "SharpHound.exe" "SharpHound.exe" \
+    "${candidates[@]}" \
     /usr/share/windows-resources/bloodhound/SharpHound.exe \
     /usr/lib/bloodhound/resources/app/Collectors/SharpHound.exe \
     /usr/share/bloodhound/Collectors/SharpHound.exe \
     /opt/SharpHound*/SharpHound.exe || true
+  mapfile -t candidates < <(tool_file_candidates "SharpHound.ps1" "*SharpHound*.ps1" "Collectors/SharpHound.ps1")
   stage_tool_file "SharpHound.ps1" "SharpHound.ps1" \
+    "${candidates[@]}" \
     /usr/share/windows-resources/bloodhound/SharpHound.ps1 \
     /usr/lib/bloodhound/resources/app/Collectors/SharpHound.ps1 \
     /usr/share/bloodhound/Collectors/SharpHound.ps1 \
     /opt/SharpHound*/SharpHound.ps1 || true
+  mapfile -t candidates < <(tool_file_candidates "Rubeus.exe" "*Rubeus*.exe" "Ghostpack-CompiledBinaries/*Rubeus*.exe")
   stage_tool_file "Rubeus.exe" "Rubeus.exe" \
+    "${candidates[@]}" \
     /usr/share/windows-resources/rubeus/Rubeus.exe \
     /usr/share/rubeus/Rubeus.exe \
     /opt/Rubeus/Rubeus.exe \
     /opt/Rubeus*/Rubeus.exe || true
+  mapfile -t candidates < <(tool_file_candidates "PrintSpoofer.exe" "*PrintSpoofer*.exe")
   stage_tool_file "PrintSpoofer.exe" "PrintSpoofer.exe" \
+    "${candidates[@]}" \
     /usr/share/windows-resources/PrintSpoofer/PrintSpoofer.exe \
     /usr/share/windows-resources/PrintSpoofer.exe \
     /opt/PrintSpoofer/PrintSpoofer.exe \
     /opt/PrintSpoofer*/PrintSpoofer.exe || true
+  mapfile -t candidates < <(tool_file_candidates "winPEASx64.exe")
+  stage_tool_file "winPEASx64.exe" "winPEASx64.exe" "${candidates[@]}" || true
+  mapfile -t candidates < <(tool_file_candidates "winPEASany.exe")
+  stage_tool_file "winPEASany.exe" "winPEASany.exe" "${candidates[@]}" || true
+  mapfile -t candidates < <(tool_file_candidates "winPEAS.ps1" "WinPeasOb.ps1" "winPEAS.ps1.1")
+  stage_tool_file "winPEAS PowerShell" "winPEAS.ps1" "${candidates[@]}" || true
+  mapfile -t candidates < <(tool_file_candidates "linpeas.sh")
+  stage_tool_file "linpeas.sh" "linpeas.sh" "${candidates[@]}" || true
+  mapfile -t candidates < <(tool_file_candidates "LinEnum.sh" "LinEnum/linenum.sh" "LinEnum/LinEnum.sh" "LinEnum/*.sh")
+  stage_tool_file "LinEnum.sh" "LinEnum.sh" "${candidates[@]}" || true
+  mapfile -t candidates < <(tool_file_candidates "agent.exe")
+  stage_tool_file "agent.exe" "agent.exe" "${candidates[@]}" || true
+  mapfile -t candidates < <(tool_file_candidates "ligolo-ng_agent*_windows_amd64.zip")
+  stage_tool_file "ligolo agent archive" "ligolo-ng_agent_windows_amd64.zip" "${candidates[@]}" || true
+  mapfile -t candidates < <(tool_file_candidates "ligolo-ng_proxy*_linux_amd64.tar.gz")
+  stage_tool_file "ligolo proxy archive" "ligolo-ng_proxy_linux_amd64.tar.gz" "${candidates[@]}" || true
 
   if [[ "${OSCP_STAGE_SENSITIVE:-0}" == "1" ]]; then
+    mapfile -t candidates < <(tool_file_candidates "mimikatz.exe" "*mimikatz*.exe" "x64/mimikatz.exe")
     stage_tool_file "Mimikatz x64" "mimikatz.exe" \
+      "${candidates[@]}" \
       /usr/share/windows-resources/mimikatz/x64/mimikatz.exe \
       /usr/share/mimikatz/x64/mimikatz.exe \
       /opt/mimikatz/x64/mimikatz.exe \
@@ -1672,6 +1798,7 @@ tools_snippets() {
 [POST-SHELL COPY/PASTE SNIPPETS]
 
 1. Stage files and start the transfer server from your workspace:
+  export OSCP_TOOLS_DIR="$HOME/Documents/OffSec/Scripts"
   ./scripts/oscp.sh tools stage
   ./scripts/oscp.sh serve 8000
 
@@ -1760,6 +1887,7 @@ Session setup:
   tmux new -s oscp
   ip -br -4 addr
   ip -4 addr show tun0
+  export OSCP_TOOLS_DIR="$HOME/Documents/OffSec/Scripts"
   ./scripts/oscp.sh tools status
   ./scripts/oscp.sh tools stage
   ./scripts/oscp.sh serve 8000
