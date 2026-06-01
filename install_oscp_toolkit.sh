@@ -284,6 +284,8 @@ print_health_check() {
   check_tool rlwrap rlwrap "stable interactive shells"
   check_tool tmux tmux "exam session management"
   check_tool tcpdump tcpdump "traffic validation"
+  check_tool docker docker.io "containerised lab tooling"
+  check_tool docker-compose docker-compose "multi-container lab services"
   check_any_tool "screenshot tool" "report evidence capture" "gnome-screenshot:gnome-screenshot" "xfce4-screenshooter:xfce4-screenshooter" "flameshot:flameshot" "scrot:scrot"
 
   echo "------------------------------------------------------------"

@@ -15,6 +15,8 @@ oscp-health
 
 This creates `~/Documents/OffSec`, installs the OSCP-focused package set, stages helper files under `~/Documents/OffSec/Transfer/tools`, and installs this toolkit into `~/oscp-toolkit`.
 
+The bootstrap also installs Docker using Kali's `docker.io` package, installs `docker-compose`, enables the Docker service where possible, and adds your user to the `docker` group. Log out and back in before running Docker without `sudo`.
+
 Optional heavier Kali profiles:
 
 ```bash

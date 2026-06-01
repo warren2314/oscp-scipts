@@ -575,7 +575,70 @@ Start a server:
   oscp-serve 8000
 
 Then use the exact transfer method appropriate to your authorised target.
+
+Docker
+------
+The bootstrap installs Kali's docker.io package and docker-compose, enables the
+docker service where systemd is available, and adds your user to the docker group.
+
+After the first run, log out and back in before using Docker without sudo:
+  docker run hello-world
+  docker compose version
+
+The docker group is effectively root-equivalent. Keep that in mind on shared systems.
 EOF
+}
+
+configure_docker() {
+  log "Configuring Docker"
+
+  local docker_user="${SUDO_USER:-${USER:-}}"
+
+  if (( DRY_RUN == 1 )); then
+    printf '[dry-run] sudo systemctl enable docker --now\n'
+    if [[ -n "$docker_user" && "$docker_user" != "root" ]]; then
+      printf '[dry-run] sudo usermod -aG docker %q\n' "$docker_user"
+    fi
+    return 0
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    warn "docker command not found after package install; skipping Docker service setup."
+    return 0
+  fi
+
+  if getent group docker >/dev/null 2>&1; then
+    :
+  else
+    run_sudo groupadd docker || warn "Could not create docker group."
+  fi
+
+  if [[ -n "$docker_user" && "$docker_user" != "root" ]]; then
+    if id -nG "$docker_user" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+      ok "$docker_user is already in the docker group."
+    else
+      run_sudo usermod -aG docker "$docker_user" || warn "Could not add $docker_user to the docker group."
+      warn "Log out and back in before using docker without sudo."
+    fi
+  else
+    warn "Could not determine a non-root user to add to the docker group."
+  fi
+
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files docker.service >/dev/null 2>&1; then
+    if run_sudo systemctl enable docker --now; then
+      ok "Docker service enabled and started."
+    else
+      warn "Could not enable/start Docker with systemctl. Start it manually with: sudo systemctl enable docker --now"
+    fi
+  elif command -v service >/dev/null 2>&1; then
+    if run_sudo service docker start; then
+      ok "Docker service started."
+    else
+      warn "Could not start Docker with service. Start it manually after reboot."
+    fi
+  else
+    warn "No supported service manager found. Start Docker manually after reboot."
+  fi
 }
 
 health_summary() {
@@ -588,7 +651,7 @@ health_summary() {
     bloodhound-python sharphound certipy-ad certi bloodyAD coercer \
     ldapdomaindump ldd2bloodhound kerbrute krbrelayx rubeus responder mitm6 \
     john hashcat hydra searchsploit msfvenom chisel ligolo-proxy \
-    python3 tmux rlwrap openvpn; do
+    docker docker-compose containerd python3 tmux rlwrap openvpn; do
     if command -v "$cmd" >/dev/null 2>&1; then
       printf ' [OK]   %s\n' "$cmd"
     else
@@ -771,6 +834,12 @@ PIVOT_TRANSFER_PACKAGES=(
   putty-tools
 )
 
+CONTAINER_PACKAGES=(
+  docker.io
+  docker-compose
+  containerd
+)
+
 REPORTING_PACKAGES=(
   flameshot
   xfce4-screenshooter
@@ -810,6 +879,7 @@ main() {
     "${PRIVESC_EXPLOIT_PACKAGES[@]}" \
     "${CRACKING_PACKAGES[@]}" \
     "${PIVOT_TRANSFER_PACKAGES[@]}" \
+    "${CONTAINER_PACKAGES[@]}" \
     "${REPORTING_PACKAGES[@]}"
 
   make_layout
@@ -822,6 +892,7 @@ main() {
   install_local_toolkit
   write_aliases
   write_readme
+  configure_docker
   health_summary
 
   printf '\n'
