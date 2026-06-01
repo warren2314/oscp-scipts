@@ -4,6 +4,28 @@ Small Bash toolkit for authorised OSCP/PEN-200 style lab work. It creates a per-
 
 ## Install
 
+For a brand-new Kali rebuild, run the bootstrap first:
+
+```bash
+chmod +x bootstrap_kali_oscp_plus.sh
+./bootstrap_kali_oscp_plus.sh --yes
+source ~/.oscp_plus_aliases
+oscp-health
+```
+
+This creates `~/Documents/OffSec`, installs the OSCP-focused package set, stages helper files under `~/Documents/OffSec/Transfer/tools`, and installs this toolkit into `~/oscp-toolkit`.
+
+Optional heavier Kali profiles:
+
+```bash
+./bootstrap_kali_oscp_plus.sh --large --yes
+./bootstrap_kali_oscp_plus.sh --everything --yes
+```
+
+The default profile is recommended for OSCP+ prep. The heavier profiles install a lot of tools you will not need and can include restricted-use tooling; installing a tool does not make every feature exam-allowed.
+
+For just the local workspace toolkit:
+
 ```bash
 chmod +x install_oscp_toolkit.sh
 ./install_oscp_toolkit.sh

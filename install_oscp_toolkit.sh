@@ -50,6 +50,7 @@ require_source_file() {
 copy_toolkit() {
   require_source_file "init_oscp.sh"
   require_source_file "refresh_workspace.sh"
+  require_source_file "install_oscp_toolkit.sh"
   require_source_file "templates/oscp.sh"
   require_source_file "templates/cmds.sh"
   require_source_file "templates/helper.sh"
@@ -59,9 +60,14 @@ copy_toolkit() {
 
   install -m 0755 "$SRC_DIR/init_oscp.sh" "$INSTALL_DIR/init_oscp.sh"
   install -m 0755 "$SRC_DIR/refresh_workspace.sh" "$INSTALL_DIR/refresh_workspace.sh"
+  install -m 0755 "$SRC_DIR/install_oscp_toolkit.sh" "$INSTALL_DIR/install_oscp_toolkit.sh"
   install -m 0755 "$SRC_DIR/templates/oscp.sh" "$INSTALL_DIR/templates/oscp.sh"
   install -m 0755 "$SRC_DIR/templates/cmds.sh" "$INSTALL_DIR/templates/cmds.sh"
   install -m 0755 "$SRC_DIR/templates/helper.sh" "$INSTALL_DIR/templates/helper.sh"
+
+  if [[ -f "$SRC_DIR/bootstrap_kali_oscp_plus.sh" ]]; then
+    install -m 0755 "$SRC_DIR/bootstrap_kali_oscp_plus.sh" "$INSTALL_DIR/bootstrap_kali_oscp_plus.sh"
+  fi
 
   if [[ -f "$SRC_DIR/README.md" ]]; then
     install -m 0644 "$SRC_DIR/README.md" "$INSTALL_DIR/README.md"
@@ -298,10 +304,20 @@ print_health_check() {
   check_tool ldapsearch ldap-utils "LDAP enumeration"
   check_tool ldapdomaindump ldapdomaindump "LDAP dump after valid AD creds"
   check_tool evil-winrm evil-winrm "WinRM shell access"
+  check_tool certipy-ad certipy-ad "AD CS enumeration and abuse checks"
+  check_tool certi certi "lightweight AD CS certificate helper"
+  check_tool bloodyAD bloodyad "AD object and privilege path checks"
+  check_tool kerbrute kerbrute "Kerberos user/password validation"
+  check_tool coercer coercer "coerced-auth lab testing; verify live rules"
+  check_tool krbrelayx krbrelayx "Kerberos relay helper; verify live rules"
+  check_tool mitm6 mitm6 "IPv6 spoofing lab testing; verify live rules"
   check_tool responder responder "LLMNR/NBT-NS lab testing"
   check_tool snmpwalk snmp "SNMP enumeration"
   check_any_tool "bloodhound" "BloodHound GUI" "bloodhound:bloodhound" "bloodhound-ce:-"
-  check_tool bloodhound-python bloodhound.py "BloodHound collection from Kali"
+  check_tool bloodhound-setup bloodhound "BloodHound CE initial setup helper"
+  check_any_tool "BloodHound ingestor" "BloodHound collection from Kali" "bloodhound-ce-python:bloodhound-ce-python" "bloodhound-python:bloodhound.py"
+  check_tool sharphound sharphound "BloodHound CE collector"
+  check_tool rubeus rubeus "Kerberos helper; verify live rules"
   mapfile -t candidates < <(tool_file_candidates "PowerView.ps1" "oscp-ad/PowerView.ps1" "Powershell/PowerView.ps1" "PowerShell/PowerView.ps1")
   check_file_any "PowerView.ps1" "stageable Windows AD recon script" \
     "${candidates[@]}" \
