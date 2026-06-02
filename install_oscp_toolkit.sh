@@ -11,13 +11,14 @@
 #
 # What it does:
 #   1. Copies init_oscp.sh and templates/ to ~/oscp-toolkit/
-#   2. Optionally adds an oscp-init alias to ~/.bashrc and ~/.zshrc
+#   2. Adds launcher commands in ~/.local/bin and optional shell aliases
 #   3. Runs a tool and wordlist health check
 #   4. Installs missing apt packages only when --install-missing is used
 
 set -euo pipefail
 
 INSTALL_DIR="${HOME}/oscp-toolkit"
+BIN_DIR="${HOME}/.local/bin"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CHECK_ONLY=0
@@ -47,6 +48,31 @@ require_source_file() {
   [[ -f "$SRC_DIR/$rel" ]] || { echo "[-] Missing source file: $SRC_DIR/$rel" >&2; exit 1; }
 }
 
+install_file() {
+  local mode="${1:?mode required}"
+  local src="${2:?source required}"
+  local dest="${3:?destination required}"
+
+  if [[ -f "$dest" ]] && cmp -s "$src" "$dest"; then
+    chmod "$mode" "$dest"
+    return 0
+  fi
+
+  install -m "$mode" "$src" "$dest"
+}
+
+write_launcher() {
+  local name="${1:?name required}"
+  local target="${2:?target required}"
+
+  mkdir -p "$BIN_DIR"
+  cat > "$BIN_DIR/$name" <<EOF
+#!/usr/bin/env bash
+exec "$target" "\$@"
+EOF
+  chmod 0755 "$BIN_DIR/$name"
+}
+
 copy_toolkit() {
   require_source_file "init_oscp.sh"
   require_source_file "refresh_workspace.sh"
@@ -58,22 +84,27 @@ copy_toolkit() {
   echo "[*] Installing toolkit into: $INSTALL_DIR"
   mkdir -p "$INSTALL_DIR/templates"
 
-  install -m 0755 "$SRC_DIR/init_oscp.sh" "$INSTALL_DIR/init_oscp.sh"
-  install -m 0755 "$SRC_DIR/refresh_workspace.sh" "$INSTALL_DIR/refresh_workspace.sh"
-  install -m 0755 "$SRC_DIR/install_oscp_toolkit.sh" "$INSTALL_DIR/install_oscp_toolkit.sh"
-  install -m 0755 "$SRC_DIR/templates/oscp.sh" "$INSTALL_DIR/templates/oscp.sh"
-  install -m 0755 "$SRC_DIR/templates/cmds.sh" "$INSTALL_DIR/templates/cmds.sh"
-  install -m 0755 "$SRC_DIR/templates/helper.sh" "$INSTALL_DIR/templates/helper.sh"
+  install_file 0755 "$SRC_DIR/init_oscp.sh" "$INSTALL_DIR/init_oscp.sh"
+  install_file 0755 "$SRC_DIR/refresh_workspace.sh" "$INSTALL_DIR/refresh_workspace.sh"
+  install_file 0755 "$SRC_DIR/install_oscp_toolkit.sh" "$INSTALL_DIR/install_oscp_toolkit.sh"
+  install_file 0755 "$SRC_DIR/templates/oscp.sh" "$INSTALL_DIR/templates/oscp.sh"
+  install_file 0755 "$SRC_DIR/templates/cmds.sh" "$INSTALL_DIR/templates/cmds.sh"
+  install_file 0755 "$SRC_DIR/templates/helper.sh" "$INSTALL_DIR/templates/helper.sh"
 
   if [[ -f "$SRC_DIR/bootstrap_kali_oscp_plus.sh" ]]; then
-    install -m 0755 "$SRC_DIR/bootstrap_kali_oscp_plus.sh" "$INSTALL_DIR/bootstrap_kali_oscp_plus.sh"
+    install_file 0755 "$SRC_DIR/bootstrap_kali_oscp_plus.sh" "$INSTALL_DIR/bootstrap_kali_oscp_plus.sh"
   fi
 
   if [[ -f "$SRC_DIR/README.md" ]]; then
-    install -m 0644 "$SRC_DIR/README.md" "$INSTALL_DIR/README.md"
+    install_file 0644 "$SRC_DIR/README.md" "$INSTALL_DIR/README.md"
   fi
 
   echo "[+] Files installed."
+
+  write_launcher oscp-init "$INSTALL_DIR/init_oscp.sh"
+  write_launcher oscp-refresh "$INSTALL_DIR/refresh_workspace.sh"
+  write_launcher oscp-health "$INSTALL_DIR/install_oscp_toolkit.sh"
+  echo "[+] Launchers installed into $BIN_DIR"
 
   if [[ "$ADD_ALIAS" -eq 1 ]]; then
     local alias_line="alias oscp-init='${INSTALL_DIR}/init_oscp.sh'"
@@ -98,8 +129,16 @@ copy_toolkit() {
         echo "[+] Added refresh alias to $rc"
       fi
     done
-    echo "[*] New terminal command: oscp-init -n boxname -t <ip>"
-    echo "[*] Refresh an old workspace: oscp-refresh /path/to/workspace"
+  fi
+
+  echo "[*] New terminal command: oscp-init -n boxname -t <ip>"
+  echo "[*] Refresh an old workspace: oscp-refresh /path/to/workspace"
+  if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+    echo "[!] $BIN_DIR is not currently in PATH."
+    echo "    For this terminal, run: export PATH=\"$BIN_DIR:\$PATH\""
+    echo "    Then run: oscp-init -n boxname -t <ip>"
+  else
+    echo "[*] If aliases were just added, use a new terminal or run: source ~/.zshrc"
   fi
 }
 
