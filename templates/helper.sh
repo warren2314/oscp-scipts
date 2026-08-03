@@ -7,7 +7,7 @@
 set -uo pipefail
 umask 077
 
-TOOLKIT_VERSION="2026.05.30-ad-presumed"
+TOOLKIT_VERSION="2026.08.03-guided"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OSCP="$SCRIPT_DIR/oscp.sh"
@@ -124,6 +124,9 @@ draw_header() {
 
 draw_menu() {
   cat <<MENU
+  ${BOLD}RECOMMENDED${RESET}
+    0) Open guided dashboard and compact menu
+
   ${BOLD}SETUP${RESET}
     1) Set target / subnet
     2) Status
@@ -176,6 +179,12 @@ draw_menu() {
 
     q) Quit
 MENU
+}
+
+action_guided() {
+  local guided="$SCRIPT_DIR/guided.sh"
+  [[ -x "$guided" ]] || { echo "${RED}[-] $guided is missing. Refresh this workspace.${RESET}"; return; }
+  "$guided"
 }
 
 action_set_target() {
@@ -455,6 +464,7 @@ while true; do
   read -r -p "${BOLD}choose>${RESET} " choice
 
   case "$choice" in
+    0) action_guided ;;
     1) action_set_target ;;
     2) action_status ;;
     3) action_discover ;;

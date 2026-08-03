@@ -23,8 +23,8 @@ Examples:
   ./refresh_workspace.sh ~/oscp/20260525_1556_filebrowser
   cd ~/oscp/20260525_1556_filebrowser && ~/oscp-toolkit/refresh_workspace.sh .
 
-This keeps a timestamped backup under scripts/.backup_<timestamp>/, then copies
-the current templates/oscp.sh, templates/helper.sh, and templates/cmds.sh.
+This keeps a timestamped backup under scripts/.backup_<timestamp>/, then updates
+the command runners, guided interface, progress template, and reference playbooks.
 USAGE
 }
 
@@ -47,8 +47,11 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPL_DIR="$SCRIPT_DIR/templates"
 
-for required in oscp.sh helper.sh cmds.sh; do
+for required in oscp.sh helper.sh guided.sh cmds.sh progress.tsv; do
   [[ -f "$TEMPL_DIR/$required" ]] || die "Missing template: $TEMPL_DIR/$required"
+done
+for required in AD_PLAYBOOK.md WINDOWS_PRIVESC.md LATERAL_MOVEMENT.md ADVANCED_AD.md; do
+  [[ -f "$TEMPL_DIR/references/$required" ]] || die "Missing reference template: $TEMPL_DIR/references/$required"
 done
 
 [[ -d "$TARGET" ]] || die "Workspace directory not found: $TARGET"
@@ -64,15 +67,32 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 BACKUP="$ROOT/scripts/.backup_$STAMP"
 mkdir -p "$BACKUP"
 
-for script in oscp.sh helper.sh cmds.sh; do
+for script in oscp.sh helper.sh guided.sh cmds.sh progress.tsv; do
   if [[ -f "$ROOT/scripts/$script" ]]; then
     cp -p "$ROOT/scripts/$script" "$BACKUP/$script"
   fi
-  install -m 0755 "$TEMPL_DIR/$script" "$ROOT/scripts/$script"
+  case "$script" in
+    progress.tsv) install -m 0644 "$TEMPL_DIR/$script" "$ROOT/scripts/$script" ;;
+    *) install -m 0755 "$TEMPL_DIR/$script" "$ROOT/scripts/$script" ;;
+  esac
 done
 
 mkdir -p "$ROOT/ad" "$ROOT/creds" "$ROOT/proof" "$ROOT/notes" "$ROOT/reports" \
-  "$ROOT/evidence" "$ROOT/privesc/linux" "$ROOT/privesc/windows" "$ROOT/transfer/tools"
+  "$ROOT/evidence" "$ROOT/privesc/linux" "$ROOT/privesc/windows" "$ROOT/references" "$ROOT/transfer/tools"
+
+mkdir -p "$BACKUP/references"
+for reference in AD_PLAYBOOK.md WINDOWS_PRIVESC.md LATERAL_MOVEMENT.md ADVANCED_AD.md; do
+  if [[ -f "$ROOT/references/$reference" ]]; then
+    cp -p "$ROOT/references/$reference" "$BACKUP/references/$reference"
+  fi
+  install -m 0644 "$TEMPL_DIR/references/$reference" "$ROOT/references/$reference"
+done
+
+if [[ ! -f "$ROOT/reports/progress.tsv" ]]; then
+  install -m 0600 "$TEMPL_DIR/progress.tsv" "$ROOT/reports/progress.tsv"
+fi
+[[ -f "$ROOT/reports/profile.txt" ]] || printf 'standalone\n' > "$ROOT/reports/profile.txt"
+[[ -f "$ROOT/reports/phase.txt" ]] || printf 'setup\n' > "$ROOT/reports/phase.txt"
 
 if [[ ! -f "$ROOT/creds/creds.csv" ]]; then
   cat > "$ROOT/creds/creds.csv" <<'EOF'
@@ -125,4 +145,4 @@ echo "    $ROOT/scripts"
 echo "[+] Backup:"
 echo "    $BACKUP"
 echo "[+] Start menu:"
-echo "    cd \"$ROOT\" && ./scripts/helper.sh"
+echo "    cd \"$ROOT\" && ./scripts/guided.sh"

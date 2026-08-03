@@ -1,0 +1,25 @@
+id	profile	state	label
+scope-confirmed	all	todo	Confirm the control-panel scope, target objectives, and current exam rules
+target-set	all	todo	Save the current target and subnet
+vpn-checked	all	todo	Confirm VPN address, routing, DNS, and time synchronization
+tcp-full	all	todo	Complete and save a full TCP port scan
+tcp-deep	all	todo	Complete scripts and version detection on discovered ports
+udp-scan	all	todo	Check relevant UDP services where time permits
+service-enum	all	todo	Enumerate every discovered service and record the interesting results
+web-enum	all	todo	Complete manual and tool-assisted web enumeration where applicable
+creds-logged	all	todo	Log every credential or hash with its source
+creds-reused	all	todo	Test each credential against justified services and hosts
+foothold	all	todo	Document a reproducible initial-access path
+local-enum	all	todo	Complete local privilege-escalation enumeration
+priv-esc	all	todo	Document and verify the privilege-escalation path
+local-proof	standalone	todo	Submit and capture local.txt from an interactive shell
+proof	standalone	todo	Submit and capture proof.txt from an administrative interactive shell
+ad-creds	ad	todo	Validate the supplied domain credential and check password policy
+ad-baseline	ad	todo	Enumerate SMB, LDAP, DNS, users, groups, shares, and host access
+ad-bloodhound	ad	todo	Collect and review BloodHound data for reachable paths
+ad-roasting	ad	todo	Check evidence-led AS-REP and Kerberoast opportunities
+ad-lateral	ad	todo	Document each lateral-movement hop and re-enumerate after access changes
+ad-objectives	ad	todo	Complete and submit the control-panel objective for every AD machine
+screenshots	all	todo	Index proof screenshots showing the flag and target IP
+report-notes	all	todo	Record exact commands, concise output, evidence paths, and remediation notes
+final-review	all	todo	Recheck submissions, screenshots, report order, and required archive format

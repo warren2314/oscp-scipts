@@ -8,7 +8,7 @@
 set -euo pipefail
 umask 077
 
-TOOLKIT_VERSION="2026.05.30-ad-presumed"
+TOOLKIT_VERSION="2026.08.03-guided"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCANS_DIR="$ROOT_DIR/scans"
 DISC_DIR="$SCANS_DIR/discovery"
@@ -38,6 +38,11 @@ HASHES_FILE="$LOOT_DIR/hashes.txt"
 COMMANDS_LOG="$ROOT_DIR/commands.log"
 SCORING_FILE="$ROOT_DIR/reports/scoring.md"
 SCREENSHOT_INDEX="$EVIDENCE_DIR/screenshots.md"
+PROGRESS_FILE="$ROOT_DIR/reports/progress.tsv"
+PROFILE_FILE="$ROOT_DIR/reports/profile.txt"
+PHASE_FILE="$ROOT_DIR/reports/phase.txt"
+FOCUS_FILE="$ROOT_DIR/reports/focus.txt"
+REFERENCE_DIR="$ROOT_DIR/references"
 
 mkdir -p "$DISC_DIR" "$NMAP_DIR" "$VULN_DIR" "$WEB_DIR" "$SMB_DIR" "$FTP_DIR" \
   "$LDAP_DIR" "$RPC_DIR" "$SNMP_DIR" "$WINRM_DIR" "$AD_DIR" "$LOOT_DIR" \
@@ -180,6 +185,8 @@ save_env_file() {
     [[ -n "${OSCP_DOMAIN:-}" ]] && printf 'OSCP_DOMAIN=%s\n' "$OSCP_DOMAIN"
     printf 'OSCP_WORDLIST=%s\n' "${OSCP_WORDLIST:-/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt}"
     printf 'OSCP_VHOST_WORDLIST=%s\n' "${OSCP_VHOST_WORDLIST:-/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt}"
+    [[ -n "${OSCP_DISCOVERY_PORTS:-}" ]] && printf 'OSCP_DISCOVERY_PORTS=%s\n' "$OSCP_DISCOVERY_PORTS"
+    [[ -n "${OSCP_DISCOVERY_PORTS_WIDE:-}" ]] && printf 'OSCP_DISCOVERY_PORTS_WIDE=%s\n' "$OSCP_DISCOVERY_PORTS_WIDE"
   } > "$ENV_FILE"
   chmod 600 "$ENV_FILE"
   ok "Saved $ENV_FILE"
@@ -297,6 +304,7 @@ cred() {
   echo "$(date +"%Y-%m-%d %H:%M") - $entry" >> "$CREDS_FILE"
   ok "Credential logged"
   note "Cred: $entry"
+  task_set_state "creds-logged" "done" 1
 }
 
 add_cred_structured() {
@@ -323,6 +331,7 @@ add_cred_structured() {
 
   echo "$(date +"%Y-%m-%d %H:%M") - $service - $user:$secret ($source)" >> "$CREDS_FILE"
   note "Cred: $service $user from $source"
+  task_set_state "creds-logged" "done" 1
 
   ok "Credential logged:"
   echo "  $CREDS_CSV"
@@ -482,7 +491,7 @@ url_for_port() {
 }
 
 usage() {
-  cat <<'USAGE'
+  cat <<USAGE
 oscp.sh - OSCP workspace runner
 
 Version:
@@ -516,6 +525,12 @@ Service enumeration:
   ./scripts/oscp.sh enum-winrm <IP>
 
 Workflow helpers:
+  ./scripts/oscp.sh guide                      # dashboard and next three actions
+  ./scripts/oscp.sh profile [standalone|ad]    # select relevant checklist
+  ./scripts/oscp.sh phase [PHASE]              # setup/enum/foothold/privesc/...
+  ./scripts/oscp.sh focus [TEXT]               # save or show the current focus
+  ./scripts/oscp.sh task [list|done|skip|undo] [ID]
+  ./scripts/oscp.sh reference [ad|windows|lateral|advanced-ad]
   ./scripts/oscp.sh quick [IP]                 # nmap-full, nmap-deep, enum-all
   ./scripts/oscp.sh ad [DC_IP] [DOMAIN] [USER] [PASS]
                                                # AD presumed-breach command block
@@ -577,11 +592,13 @@ _run_discover() {
 }
 
 discover() {
+  load_env_file
   local ports="${OSCP_DISCOVERY_PORTS:-$DEFAULT_DISCOVERY_PORTS}"
   _run_discover "${1:-}" "$ports"
 }
 
 discover_wide() {
+  load_env_file
   local ports="${OSCP_DISCOVERY_PORTS_WIDE:-$DEFAULT_DISCOVERY_PORTS_WIDE}"
   _run_discover "${1:-}" "$ports"
 }
@@ -618,6 +635,7 @@ nmap_full() {
   ok "Open TCP ports: ${found:-<none>}"
   ok "Saved port list: $ports_file"
   note "Nmap full $target -> ports: ${found:-<none>}"
+  task_set_state "tcp-full" "done" 1
 }
 
 nmap_deep() {
@@ -642,6 +660,7 @@ nmap_deep() {
   fix_scan_perms "$out"
   note "Nmap deep $target -> $(basename "$out").[nmap|gnmap|xml]"
   ok "Deep scan saved: ${out}.[nmap|gnmap|xml]"
+  task_set_state "tcp-deep" "done" 1
 }
 
 nmap_udp() {
@@ -655,6 +674,7 @@ nmap_udp() {
   fix_scan_perms "$out"
   note "Nmap UDP $target -> $(basename "$out").[nmap|gnmap|xml]"
   ok "UDP scan saved: ${out}.[nmap|gnmap|xml]"
+  task_set_state "udp-scan" "done" 1
 }
 
 nmap_vuln() {
@@ -1124,9 +1144,17 @@ ad_helper() {
   [[ -n "$domain" ]] || domain="DOMAIN"
 
   local user="${3:-USER}"
-  local secret="${4:-PASS}"
+  local secret="${4:-}"
   local has_creds=0
-  [[ -n "${3:-}" && -n "${4:-}" ]] && has_creds=1
+  if [[ -n "${3:-}" && -z "$secret" && -t 0 && "${OSCP_AD_NO_PROMPT:-0}" != "1" ]]; then
+    read -r -s -p "[?] Password for $user (blank = placeholders): " secret
+    echo
+  fi
+  [[ -n "${3:-}" && -n "$secret" ]] && has_creds=1
+  [[ -n "$secret" ]] || secret="PASS"
+
+  mkdir -p "$(dirname "$PROFILE_FILE")"
+  printf 'ad\n' > "$PROFILE_FILE"
 
   local subnet="${OSCP_SUBNET:-SUBNET_CIDR}"
   local rel_ad="ad"
@@ -1629,6 +1657,265 @@ score_helper() {
   echo "$SCORING_FILE"
 }
 
+ensure_progress_file() {
+  [[ -f "$PROGRESS_FILE" ]] && return 0
+  mkdir -p "$(dirname "$PROGRESS_FILE")"
+
+  if [[ -f "$ROOT_DIR/scripts/progress.tsv" ]]; then
+    cp "$ROOT_DIR/scripts/progress.tsv" "$PROGRESS_FILE"
+  else
+    cat > "$PROGRESS_FILE" <<'EOF'
+id	profile	state	label
+scope-confirmed	all	todo	Confirm scope, objectives, and current exam rules
+target-set	all	todo	Save the current target and subnet
+tcp-full	all	todo	Complete and save a full TCP scan
+tcp-deep	all	todo	Complete scripts and version detection
+service-enum	all	todo	Enumerate every discovered service
+foothold	all	todo	Document a reproducible initial-access path
+priv-esc	standalone	todo	Document and verify privilege escalation
+ad-baseline	ad	todo	Complete the AD enumeration baseline
+ad-lateral	ad	todo	Document lateral movement and re-enumeration
+screenshots	all	todo	Capture and index required proof screenshots
+final-review	all	todo	Review submissions and report artifacts
+EOF
+  fi
+  chmod 600 "$PROGRESS_FILE"
+}
+
+current_profile() {
+  local profile="standalone"
+  [[ -s "$PROFILE_FILE" ]] && profile="$(head -n 1 "$PROFILE_FILE" | tr -d '\r\n')"
+  case "$profile" in
+    standalone|ad) printf '%s\n' "$profile" ;;
+    *) printf 'standalone\n' ;;
+  esac
+}
+
+profile_helper() {
+  local profile="${1:-}"
+  if [[ -z "$profile" ]]; then
+    current_profile
+    return 0
+  fi
+  case "$profile" in
+    standalone|ad) ;;
+    *) die "usage: profile [standalone|ad]" ;;
+  esac
+  mkdir -p "$(dirname "$PROFILE_FILE")"
+  printf '%s\n' "$profile" > "$PROFILE_FILE"
+  ok "Workspace profile: $profile"
+}
+
+current_phase() {
+  local phase="setup"
+  [[ -s "$PHASE_FILE" ]] && phase="$(head -n 1 "$PHASE_FILE" | tr -d '\r\n')"
+  case "$phase" in
+    setup|enum|foothold|privesc|lateral|proof|report|done) printf '%s\n' "$phase" ;;
+    *) printf 'setup\n' ;;
+  esac
+}
+
+phase_helper() {
+  local phase="${1:-}"
+  if [[ -z "$phase" ]]; then
+    current_phase
+    return 0
+  fi
+  case "$phase" in
+    setup|enum|foothold|privesc|lateral|proof|report|done) ;;
+    *) die "usage: phase [setup|enum|foothold|privesc|lateral|proof|report|done]" ;;
+  esac
+  mkdir -p "$(dirname "$PHASE_FILE")"
+  printf '%s\n' "$phase" > "$PHASE_FILE"
+  ok "Current phase: $phase"
+}
+
+focus_helper() {
+  local focus="$*"
+  if [[ -z "$focus" ]]; then
+    if [[ -s "$FOCUS_FILE" ]]; then
+      cat "$FOCUS_FILE"
+    else
+      echo "<not set>"
+    fi
+    return 0
+  fi
+  mkdir -p "$(dirname "$FOCUS_FILE")"
+  printf '%s\n' "$focus" > "$FOCUS_FILE"
+  ok "Current focus: $focus"
+}
+
+task_set_state() {
+  local id="${1:-}"
+  local state="${2:-}"
+  local quiet="${3:-0}"
+  [[ "$id" =~ ^[a-z0-9-]+$ ]] || die "Invalid task id: $id"
+  case "$state" in
+    todo|done|skip) ;;
+    *) die "Invalid task state: $state" ;;
+  esac
+
+  ensure_progress_file
+  local tmp
+  tmp="$(mktemp "$ROOT_DIR/reports/.progress.XXXXXX")"
+  if ! awk -F '\t' -v OFS='\t' -v id="$id" -v state="$state" '
+    NR == 1 { print; next }
+    $1 == id { $3=state; found=1 }
+    { print }
+    END { if (!found) exit 7 }
+  ' "$PROGRESS_FILE" > "$tmp"; then
+    rm -f "$tmp"
+    die "Unknown task id: $id"
+  fi
+  mv "$tmp" "$PROGRESS_FILE"
+  chmod 600 "$PROGRESS_FILE"
+  [[ "$quiet" == "1" ]] || ok "Task $id -> $state"
+}
+
+task_list() {
+  ensure_progress_file
+  local profile
+  profile="$(current_profile)"
+  echo "Tasks for profile: $profile"
+  awk -F '\t' -v profile="$profile" '
+    NR == 1 || !($2 == "all" || $2 == profile) { next }
+    $3 == "done" { mark="[x]" }
+    $3 == "skip" { mark="[-]" }
+    $3 == "todo" { mark="[ ]" }
+    { printf "  %-3s %-18s %s\n", mark, $1, $4 }
+  ' "$PROGRESS_FILE"
+}
+
+task_helper() {
+  local action="${1:-list}"
+  local id="${2:-}"
+  case "$action" in
+    list) task_list ;;
+    done) task_set_state "$id" done ;;
+    skip) task_set_state "$id" skip ;;
+    undo|todo|reopen) task_set_state "$id" todo ;;
+    *) die "usage: task [list|done|skip|undo] [ID]" ;;
+  esac
+}
+
+reference_helper() {
+  local topic="${1:-list}"
+  local file=""
+  case "$topic" in
+    ad) file="$REFERENCE_DIR/AD_PLAYBOOK.md" ;;
+    windows|windows-privesc) file="$REFERENCE_DIR/WINDOWS_PRIVESC.md" ;;
+    lateral) file="$REFERENCE_DIR/LATERAL_MOVEMENT.md" ;;
+    advanced-ad|advanced) file="$REFERENCE_DIR/ADVANCED_AD.md" ;;
+    list)
+      cat <<'EOF'
+References:
+  ad           Active Directory presumed-breach playbook
+  windows      Windows privilege-escalation playbook
+  lateral      Lateral-movement decision guide
+  advanced-ad  Evidence-led advanced AD decision points
+EOF
+      return 0
+      ;;
+    *) die "usage: reference [ad|windows|lateral|advanced-ad|list]" ;;
+  esac
+  [[ -f "$file" ]] || die "Reference not found: $file. Refresh this workspace."
+  cat "$file"
+}
+
+guide() {
+  load_env_file
+  ensure_progress_file
+
+  local profile phase focus target ports deep_scan cred_count hash_count shot_count
+  local done_count total_count
+  profile="$(current_profile)"
+  phase="$(current_phase)"
+  focus="$(focus_helper)"
+  target="${OSCP_TARGET:-}"
+  [[ -n "$target" ]] && task_set_state "target-set" "done" 1
+  ports=""
+  deep_scan=""
+  [[ -n "$target" ]] && ports="$(get_ports_for_target "$target" || true)"
+  [[ -n "$target" ]] && deep_scan="$(latest_deep_scan_for "$target")"
+  cred_count=0
+  hash_count=0
+  shot_count=0
+  [[ -s "$CREDS_FILE" ]] && cred_count="$(wc -l < "$CREDS_FILE" | tr -d ' ')"
+  [[ -s "$HASHES_FILE" ]] && hash_count="$(wc -l < "$HASHES_FILE" | tr -d ' ')"
+  shot_count="$(find "$SCREENSHOTS_DIR" -maxdepth 1 -type f -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
+  read -r done_count total_count < <(awk -F '\t' -v profile="$profile" '
+    NR > 1 && ($2 == "all" || $2 == profile) { total++; if ($3 == "done" || $3 == "skip") complete++ }
+    END { printf "%d %d\n", complete+0, total+0 }
+  ' "$PROGRESS_FILE")
+
+  echo "============================================================"
+  echo " GUIDED DASHBOARD"
+  echo "============================================================"
+  printf ' Profile : %-12s Phase: %s\n' "$profile" "$phase"
+  printf ' Target  : %-15s Ports: %s\n' "${target:-<not set>}" "${ports:-<not scanned>}"
+  printf ' Progress: %s/%s tasks    Creds: %s  Hashes: %s  Shots: %s\n' "$done_count" "$total_count" "$cred_count" "$hash_count" "$shot_count"
+  printf ' Focus   : %s\n' "$focus"
+  echo "------------------------------------------------------------"
+  echo " NEXT OPEN CHECKLIST ITEMS"
+  awk -F '\t' -v profile="$profile" '
+    NR > 1 && ($2 == "all" || $2 == profile) && $3 == "todo" {
+      printf "  %-18s %s\n", $1, $4
+      shown++
+      if (shown == 3) exit
+    }
+  ' "$PROGRESS_FILE"
+  echo "------------------------------------------------------------"
+  echo " RECOMMENDED NEXT COMMANDS"
+
+  if [[ -z "$target" ]]; then
+    echo "  ./scripts/oscp.sh set-target TARGET_IP [SUBNET_CIDR]"
+  elif [[ -z "$ports" ]]; then
+    echo "  ./scripts/oscp.sh nmap-full $target"
+  elif [[ -z "$deep_scan" ]]; then
+    echo "  ./scripts/oscp.sh nmap-deep $target"
+  else
+    case "$phase" in
+      setup|enum)
+        echo "  ./scripts/oscp.sh ports $target"
+        echo "  ./scripts/oscp.sh suggest $target"
+        if [[ "$profile" == "ad" ]]; then
+          echo "  ./scripts/oscp.sh ad $target DOMAIN USER"
+          echo "  ./scripts/oscp.sh reference ad"
+        else
+          echo "  ./scripts/oscp.sh enum-all $target"
+        fi
+        ;;
+      foothold)
+        echo "  ./scripts/oscp.sh phase privesc"
+        echo "  ./scripts/oscp.sh loot-linux   # or loot-windows"
+        echo "  ./scripts/oscp.sh focus \"credential and local privilege checks\""
+        ;;
+      privesc)
+        echo "  ./scripts/oscp.sh win-privs [WHOAMI_PRIV_FILE]"
+        echo "  ./scripts/oscp.sh reference windows"
+        echo "  ./scripts/oscp.sh proof local"
+        ;;
+      lateral)
+        echo "  ./scripts/oscp.sh reference lateral"
+        echo "  ./scripts/oscp.sh task list"
+        ;;
+      proof)
+        echo "  ./scripts/oscp.sh proof proof"
+        echo "  ./scripts/oscp.sh screenshot \"proof with ip visible\""
+        echo "  ./scripts/oscp.sh phase report"
+        ;;
+      report)
+        echo "  ./scripts/oscp.sh task list"
+        echo "  Review reports/findings.md, commands.log, and evidence/screenshots.md"
+        ;;
+      done)
+        echo "  Recheck control-panel submissions and final report artifacts."
+        ;;
+    esac
+  fi
+  echo "============================================================"
+}
+
 first_existing_file() {
   local pattern match
   for pattern in "$@"; do
@@ -1853,8 +2140,8 @@ EOF
 
 Rule reminders:
   - Keep this as static local tooling. Do not use LLM/chatbot help during the live exam or report phase.
-  - Do not use Responder poisoning/spoofing where it is forbidden; treat it as restricted unless the live rules explicitly allow your exact use.
-  - Treat Empire/Covenant as restricted until you verify the live exam rules and your intended usage.
+  - Responder poisoning/spoofing is prohibited in the current OSCP+ exam rules.
+  - Empire and Covenant are listed as allowed tools, but every feature and action must still comply with the live restrictions.
 EOF
 }
 
@@ -1870,7 +2157,7 @@ This directory is for files already installed locally on your authorised exam/la
 Serve it with: ./scripts/oscp.sh serve 8000
 
 Use only within your authorised scope and current exam rules.
-Responder poisoning/spoofing and C2-style workflows may be restricted.
+Responder poisoning/spoofing is prohibited in the current OSCP+ exam rules.
 EOF
 
   mapfile -t candidates < <(tool_file_candidates "PowerView.ps1" "oscp-ad/PowerView.ps1" "Powershell/PowerView.ps1" "PowerShell/PowerView.ps1")
@@ -1984,7 +2271,7 @@ tools_snippets() {
 
 Notes:
   - These snippets avoid memory-only loaders. They stage files, fetch to disk, and leave command history/evidence easier to track.
-  - Do not run Responder poisoning/spoofing or C2 workflows unless the live rules explicitly permit your exact use.
+  - Do not run Responder poisoning/spoofing. Verify every tool feature against the live rules before use.
 EOF
 }
 
@@ -2329,6 +2616,7 @@ EOF
     "$(date +"%Y-%m-%d %H:%M")" "$(md_cell "$target")" "$(md_cell "$label")" "$rel_png" "$rel_meta" >> "$SCREENSHOT_INDEX"
 
   note "Screenshot evidence '$label' target=$target -> $rel_png"
+  task_set_state "screenshots" "done" 1
   ok "Screenshot saved: $png"
   ok "Metadata saved: $meta"
   ok "Index updated: $SCREENSHOT_INDEX"
@@ -2374,10 +2662,17 @@ set_target() {
   [[ -n "$subnet" ]] && require_cidr "$subnet"
   save_env_file "$target" "$subnet"
   note "Set target=$target subnet=${subnet:-<none>}"
+  task_set_state "target-set" "done" 1
 }
 
 cmd="${1:-}"
 case "$cmd" in
+  guide|dashboard|next) shift; guide ;;
+  profile) shift; profile_helper "${1:-}" ;;
+  phase) shift; phase_helper "${1:-}" ;;
+  focus) shift; focus_helper "$*" ;;
+  task|progress) shift; task_helper "${1:-list}" "${2:-}" ;;
+  reference|ref) shift; reference_helper "${1:-list}" ;;
   set-target) shift; set_target "${1:-}" "${2:-}" ;;
   discover) shift; discover "${1:-}" ;;
   discover-wide) shift; discover_wide "${1:-}" ;;
@@ -2399,7 +2694,7 @@ case "$cmd" in
   enum-snmp) shift; enum_snmp "${1:-}" ;;
   enum-winrm) shift; enum_winrm "${1:-}" ;;
   quick) shift; quick "${1:-}" ;;
-  ad) shift; ad_helper "${1:-}" ;;
+  ad) shift; ad_helper "${1:-}" "${2:-}" "${3:-}" "${4:-}" ;;
   loot-linux) shift; loot_linux ;;
   loot-windows) shift; loot_windows ;;
   win-privs|windows-privs|whoami-privs) shift; win_privs "${1:-}" ;;

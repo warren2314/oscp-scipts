@@ -92,8 +92,11 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPL_DIR="$SCRIPT_DIR/templates"
 
-for required in oscp.sh cmds.sh helper.sh; do
+for required in oscp.sh cmds.sh helper.sh guided.sh progress.tsv; do
   [[ -f "$TEMPL_DIR/$required" ]] || { echo "[-] Missing $TEMPL_DIR/$required" >&2; exit 1; }
+done
+for required in AD_PLAYBOOK.md WINDOWS_PRIVESC.md LATERAL_MOVEMENT.md ADVANCED_AD.md; do
+  [[ -f "$TEMPL_DIR/references/$required" ]] || { echo "[-] Missing $TEMPL_DIR/references/$required" >&2; exit 1; }
 done
 
 DATE_TAG="$(date +%Y%m%d_%H%M)"
@@ -131,6 +134,7 @@ mkdir -p \
   "$ROOT/scripts" \
   "$ROOT/output" \
   "$ROOT/reports" \
+  "$ROOT/references" \
   "$ROOT/transfer/tools"
 
 touch "$ROOT/hosts.txt" "$ROOT/creds.txt" "$ROOT/todo.txt" "$ROOT/loot/hashes.txt" "$ROOT/commands.log"
@@ -374,6 +378,10 @@ Use \`./scripts/oscp.sh screenshot "label"\` to capture report evidence with a t
 | --- | --- | --- | --- | --- |
 EOF
 
+install -m 0600 "$TEMPL_DIR/progress.tsv" "$ROOT/reports/progress.tsv"
+printf 'standalone\n' > "$ROOT/reports/profile.txt"
+printf 'setup\n' > "$ROOT/reports/phase.txt"
+
 ENV_SUBNET="$SUBNET"
 if [[ -z "$ENV_SUBNET" && -n "$TARGET" ]]; then
   ENV_SUBNET="$(infer_subnet_24 "$TARGET" || true)"
@@ -391,18 +399,27 @@ chmod 600 "$ROOT/.oscp_env"
 install -m 0755 "$TEMPL_DIR/oscp.sh" "$ROOT/scripts/oscp.sh"
 install -m 0755 "$TEMPL_DIR/cmds.sh" "$ROOT/scripts/cmds.sh"
 install -m 0755 "$TEMPL_DIR/helper.sh" "$ROOT/scripts/helper.sh"
+install -m 0755 "$TEMPL_DIR/guided.sh" "$ROOT/scripts/guided.sh"
+install -m 0644 "$TEMPL_DIR/progress.tsv" "$ROOT/scripts/progress.tsv"
+for reference in AD_PLAYBOOK.md WINDOWS_PRIVESC.md LATERAL_MOVEMENT.md ADVANCED_AD.md; do
+  install -m 0644 "$TEMPL_DIR/references/$reference" "$ROOT/references/$reference"
+done
 
 cat > "$ROOT/README.txt" <<EOF
 Workspace: ${NAME}
 Created: $(date)
 Path: ${ROOT}
 
-Interactive workflow:
+Guided workflow (recommended):
   cd "${ROOT}"
+  ./scripts/guided.sh
+
+Advanced interactive workflow:
   ./scripts/helper.sh
 
 CLI workflow:
   ./scripts/oscp.sh status
+  ./scripts/oscp.sh guide
   ./scripts/oscp.sh set-target <ip> [cidr]
   ./scripts/oscp.sh nmap-full
   ./scripts/oscp.sh nmap-deep
@@ -413,7 +430,7 @@ Common logging:
   ./scripts/oscp.sh note "found anonymous SMB share"
   ./scripts/oscp.sh cred "bob:Password123 (SMB on 192.168.56.10)"
   ./scripts/oscp.sh add-cred smb bob 'Password123' 'anonymous share config'
-  ./scripts/oscp.sh ad <dc-ip> <domain.local> <user> '<password>'
+  ./scripts/oscp.sh ad <dc-ip> <domain.local> <user>   # prompts for password
   ./scripts/oscp.sh hash "<hash> (source/type)"
   ./scripts/oscp.sh win-privs
   ./scripts/oscp.sh win-privs privesc/windows/whoami_priv.txt
@@ -429,4 +446,4 @@ EOF
 
 chmod 700 "$ROOT"
 echo "[+] Created workspace at: $ROOT"
-echo "[+] Next: cd \"$ROOT\" && ./scripts/helper.sh"
+echo "[+] Next: cd \"$ROOT\" && ./scripts/guided.sh"

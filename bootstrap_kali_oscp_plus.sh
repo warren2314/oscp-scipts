@@ -544,6 +544,7 @@ source ~/.oscp_plus_aliases
 oscp-health
 oscp-new -n first-box -t 192.168.56.10 -b "\$OFFSEC_HOME/Workspaces"
 cd "\$OFFSEC_HOME/Workspaces"
+cd <new-workspace> && ./scripts/guided.sh
 
 Useful aliases/functions
 ------------------------
@@ -563,7 +564,7 @@ Exam-rule reminders
 - Do not use LLM/chatbot help during the live exam or report phase.
 - Do not use automatic exploitation tools or mass vulnerability scanners where forbidden.
 - Metasploit modules and Meterpreter are restricted. msfvenom and multi/handler have separate allowances in the official guide.
-- Responder poisoning/spoofing, C2-style workflows, and credential dumping tools may be restricted depending on exact use. Verify before running them.
+- Responder poisoning/spoofing is prohibited in the exam. Other installed tools remain subject to the live restrictions for the exact feature and action used.
 - Installing a package does not mean every feature in that package is exam-allowed.
 
 Staged helper files

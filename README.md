@@ -1,6 +1,6 @@
 # OSCP Training Toolkit
 
-Small Bash toolkit for authorised OSCP/PEN-200 style lab work. It creates a per-target workspace, runs repeatable enumeration, and keeps outputs organised for notes and reporting.
+Small Bash toolkit for authorised OSCP/PEN-200 style lab work. It creates a per-target workspace, runs repeatable enumeration, and keeps outputs organised for notes and reporting. The guided dashboard keeps the current phase, focus, checklist, evidence counts, and next three actions visible so you do not have to remember the whole workflow under pressure.
 
 ## Install
 
@@ -66,7 +66,7 @@ The refresh keeps a backup in `scripts/.backup_<timestamp>/`.
 ```bash
 oscp-init -n secura -t 192.168.56.10
 cd ./YYYYMMDD_HHMM_secura
-./scripts/helper.sh
+./scripts/guided.sh
 ```
 
 Without the alias:
@@ -75,15 +75,53 @@ Without the alias:
 ~/oscp-toolkit/init_oscp.sh -n secura -t 192.168.56.10
 ```
 
-## Recommended Flow
+The original 38-option interface remains available as an advanced menu:
 
 ```bash
+./scripts/helper.sh
+```
+
+## Guided Flow
+
+Start each session with:
+
+```bash
+./scripts/oscp.sh guide
+```
+
+For an independent target:
+
+```bash
+./scripts/oscp.sh profile standalone
 ./scripts/oscp.sh status
 ./scripts/oscp.sh nmap-full
 ./scripts/oscp.sh nmap-deep
 ./scripts/oscp.sh suggest
 ./scripts/oscp.sh enum-all
 ```
+
+For the AD set:
+
+```bash
+./scripts/oscp.sh profile ad
+./scripts/oscp.sh phase enum
+./scripts/oscp.sh ad 192.168.56.10 corp.local alice
+./scripts/oscp.sh reference ad
+```
+
+When the password is omitted, the AD helper prompts for it without writing the plaintext password directly into shell history.
+
+Track the current activity instead of relying on memory:
+
+```bash
+./scripts/oscp.sh phase foothold
+./scripts/oscp.sh focus "manual Windows service and task checks"
+./scripts/oscp.sh task list
+./scripts/oscp.sh task done foothold
+./scripts/oscp.sh task skip udp-scan
+```
+
+Target setup, saved scans, credential logging, and screenshots automatically complete the corresponding tracker items. Service coverage, access, privilege escalation, and proof milestones remain yours to confirm after reviewing the evidence.
 
 For subnet work:
 
@@ -108,7 +146,7 @@ Web enumeration saves HTTP headers, WhatWeb output, Nikto checks when installed,
 ./scripts/oscp.sh web-all
 ./scripts/oscp.sh enum-smb 192.168.56.10
 ./scripts/oscp.sh enum-ldap 192.168.56.10
-./scripts/oscp.sh ad 192.168.56.10 corp.local alice 'Password123!'
+./scripts/oscp.sh ad 192.168.56.10 corp.local alice
 ./scripts/oscp.sh nmap-udp
 ./scripts/oscp.sh loot-linux
 ./scripts/oscp.sh loot-windows
@@ -145,7 +183,7 @@ The AD helper is built for the presumed-breach start where you are given a domai
 ```bash
 ./scripts/oscp.sh suggest
 ./scripts/oscp.sh ad
-./scripts/oscp.sh ad 192.168.56.10 corp.local alice 'Password123!'
+./scripts/oscp.sh ad 192.168.56.10 corp.local alice
 ./scripts/oscp.sh loot-linux
 ./scripts/oscp.sh loot-windows
 ./scripts/oscp.sh win-privs
@@ -168,7 +206,7 @@ export OSCP_TOOLS_DIR="$HOME/Documents/OffSec/Scripts"
 ./scripts/oscp.sh serve 8000
 ```
 
-It looks for BloodHound, SharpHound, PowerView, Rubeus, evil-winrm, Responder, NetExec/CrackMapExec, Impacket, PrintSpoofer, Empire, Covenant, and Mimikatz in common Kali paths. Mimikatz staging is opt-in:
+It looks for BloodHound, SharpHound, PowerView, Rubeus, evil-winrm, Responder, NetExec/CrackMapExec, Impacket, PrintSpoofer, Empire, Covenant, and Mimikatz in common Kali paths. Tool installation is not the same as permission to use every feature. Responder poisoning/spoofing is prohibited in the current OSCP+ exam rules. Mimikatz staging is opt-in:
 
 The default search path also includes `~/Documents/OffSec/Scripts` and common subfolders such as `oscp-ad`, `Ghostpack-CompiledBinaries`, `Powershell`, `LinEnum`, and `PSExec`. Use `OSCP_EXTRA_TOOL_DIRS` with colon-separated paths for more locations.
 
@@ -176,7 +214,32 @@ The default search path also includes `~/Documents/OffSec/Scripts` and common su
 OSCP_STAGE_SENSITIVE=1 ./scripts/oscp.sh tools stage
 ```
 
-This helper does not create memory-only download cradles, reflective loaders, or bypasses. The `memory` mode shows local PowerShell import patterns from files already on disk. Use only tools and features allowed by the live exam rules; Responder poisoning/spoofing and C2-style workflows may be restricted.
+This helper does not create memory-only download cradles, reflective loaders, or bypasses. The `memory` mode shows local PowerShell import patterns from files already on disk. Use only features and actions allowed by the live exam rules.
+
+## Curated Playbooks
+
+The workspace includes short, evidence-led references distilled for the exam workflow:
+
+```bash
+./scripts/oscp.sh reference ad
+./scripts/oscp.sh reference windows
+./scripts/oscp.sh reference lateral
+./scripts/oscp.sh reference advanced-ad
+```
+
+Persistence, blind spraying, poisoning/spoofing, in-memory bypasses, and destructive domain changes are intentionally excluded from the core path. Advanced AD material is presented as decision points that require a demonstrated prerequisite.
+
+The repository also includes an [eight-week practice plan](TRAINING_PLAN.md) for turning the workflow into habit before an end-of-September exam.
+
+## Offline Tests
+
+Run these before freezing or refreshing the exam VM:
+
+```bash
+bash tests/run.sh
+```
+
+The tests validate Bash syntax, workspace creation, guided tracking, AD argument handling, configuration preservation, references, and safe workspace refresh without performing network scans.
 
 ## Screenshot Evidence
 

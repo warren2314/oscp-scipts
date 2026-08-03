@@ -77,12 +77,19 @@ copy_toolkit() {
   require_source_file "init_oscp.sh"
   require_source_file "refresh_workspace.sh"
   require_source_file "install_oscp_toolkit.sh"
+  require_source_file "TRAINING_PLAN.md"
   require_source_file "templates/oscp.sh"
   require_source_file "templates/cmds.sh"
   require_source_file "templates/helper.sh"
+  require_source_file "templates/guided.sh"
+  require_source_file "templates/progress.tsv"
+  require_source_file "templates/references/AD_PLAYBOOK.md"
+  require_source_file "templates/references/WINDOWS_PRIVESC.md"
+  require_source_file "templates/references/LATERAL_MOVEMENT.md"
+  require_source_file "templates/references/ADVANCED_AD.md"
 
   echo "[*] Installing toolkit into: $INSTALL_DIR"
-  mkdir -p "$INSTALL_DIR/templates"
+  mkdir -p "$INSTALL_DIR/templates/references"
 
   install_file 0755 "$SRC_DIR/init_oscp.sh" "$INSTALL_DIR/init_oscp.sh"
   install_file 0755 "$SRC_DIR/refresh_workspace.sh" "$INSTALL_DIR/refresh_workspace.sh"
@@ -90,6 +97,12 @@ copy_toolkit() {
   install_file 0755 "$SRC_DIR/templates/oscp.sh" "$INSTALL_DIR/templates/oscp.sh"
   install_file 0755 "$SRC_DIR/templates/cmds.sh" "$INSTALL_DIR/templates/cmds.sh"
   install_file 0755 "$SRC_DIR/templates/helper.sh" "$INSTALL_DIR/templates/helper.sh"
+  install_file 0755 "$SRC_DIR/templates/guided.sh" "$INSTALL_DIR/templates/guided.sh"
+  install_file 0644 "$SRC_DIR/templates/progress.tsv" "$INSTALL_DIR/templates/progress.tsv"
+  install_file 0644 "$SRC_DIR/templates/references/AD_PLAYBOOK.md" "$INSTALL_DIR/templates/references/AD_PLAYBOOK.md"
+  install_file 0644 "$SRC_DIR/templates/references/WINDOWS_PRIVESC.md" "$INSTALL_DIR/templates/references/WINDOWS_PRIVESC.md"
+  install_file 0644 "$SRC_DIR/templates/references/LATERAL_MOVEMENT.md" "$INSTALL_DIR/templates/references/LATERAL_MOVEMENT.md"
+  install_file 0644 "$SRC_DIR/templates/references/ADVANCED_AD.md" "$INSTALL_DIR/templates/references/ADVANCED_AD.md"
 
   if [[ -f "$SRC_DIR/bootstrap_kali_oscp_plus.sh" ]]; then
     install_file 0755 "$SRC_DIR/bootstrap_kali_oscp_plus.sh" "$INSTALL_DIR/bootstrap_kali_oscp_plus.sh"
@@ -98,6 +111,7 @@ copy_toolkit() {
   if [[ -f "$SRC_DIR/README.md" ]]; then
     install_file 0644 "$SRC_DIR/README.md" "$INSTALL_DIR/README.md"
   fi
+  install_file 0644 "$SRC_DIR/TRAINING_PLAN.md" "$INSTALL_DIR/TRAINING_PLAN.md"
 
   echo "[+] Files installed."
 
@@ -400,8 +414,8 @@ print_health_check() {
     /usr/share/windows-resources/mimikatz/x64/mimikatz.exe \
     /usr/share/mimikatz/x64/mimikatz.exe \
     /opt/mimikatz*/x64/mimikatz.exe
-  check_any_tool "Empire" "restricted C2-style tooling; verify live rules" "powershell-empire:-" "empire-server:-" "empire:-"
-  check_any_tool "Covenant" "restricted C2-style tooling; verify live rules" "covenant:-" "Covenant:-"
+  check_any_tool "Empire" "allowed tool; individual features must still follow live rules" "powershell-empire:-" "empire-server:-" "empire:-"
+  check_any_tool "Covenant" "allowed tool; individual features must still follow live rules" "covenant:-" "Covenant:-"
 
   echo "------------------------------------------------------------"
   echo " Passwords / Pivoting"
