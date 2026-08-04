@@ -8,7 +8,7 @@
 set -euo pipefail
 umask 077
 
-TOOLKIT_VERSION="2026.08.03-guided"
+TOOLKIT_VERSION="2026.08.04-capture"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCANS_DIR="$ROOT_DIR/scans"
 DISC_DIR="$SCANS_DIR/discovery"
@@ -36,6 +36,8 @@ CREDS_CSV="$CREDS_DIR/creds.csv"
 NOTES_FILE="$ROOT_DIR/notes.md"
 HASHES_FILE="$LOOT_DIR/hashes.txt"
 COMMANDS_LOG="$ROOT_DIR/commands.log"
+REPORT_COMMANDS_FILE="$ROOT_DIR/notes/04-report-commands.md"
+MANUAL_COMMAND_DIR="$EVIDENCE_DIR/commands"
 SCORING_FILE="$ROOT_DIR/reports/scoring.md"
 SCREENSHOT_INDEX="$EVIDENCE_DIR/screenshots.md"
 PROGRESS_FILE="$ROOT_DIR/reports/progress.tsv"
@@ -262,6 +264,40 @@ run_capture() {
   return 0
 }
 
+run_capture_live() {
+  local label="${1:?label required}"
+  local outfile="${2:?output file required}"
+  shift 2
+
+  mkdir -p "$(dirname "$outfile")"
+  info "$label -> $outfile"
+  log_command "$outfile" "$@"
+
+  set +e
+  {
+    command_line "$@"
+    echo
+    "$@"
+  } 2>&1 | tee "$outfile"
+  local -a pipeline_status=( "${PIPESTATUS[@]}" )
+  local rc=${pipeline_status[0]}
+  local tee_rc=${pipeline_status[1]}
+  set -e
+
+  (( tee_rc == 0 )) || die "failed to save captured output to $outfile"
+
+  if (( rc != 0 )); then
+    {
+      echo
+      echo "[exit-code: $rc]"
+    } | tee -a "$outfile" >&2
+    warn "$label exited with code $rc; output still saved"
+  fi
+
+  CAPTURE_LAST_RC="$rc"
+  return 0
+}
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
@@ -455,6 +491,59 @@ md_cell() {
   printf '%s\n' "$value"
 }
 
+ensure_report_commands_file() {
+  mkdir -p "$(dirname "$REPORT_COMMANDS_FILE")"
+  if [[ ! -f "$REPORT_COMMANDS_FILE" ]]; then
+    cat > "$REPORT_COMMANDS_FILE" <<'EOF'
+# Report Command Log
+
+Important manually captured commands are indexed here in chronological order.
+Raw output is stored under `evidence/commands/`.
+EOF
+  fi
+}
+
+capture_command() {
+  local label="${1:-}"
+  shift || true
+
+  [[ -n "$label" ]] || die 'capture needs a short quoted label'
+  [[ "${1:-}" == "--" ]] || die 'usage: capture "LABEL" -- COMMAND [ARG ...]'
+  shift
+  [[ "$#" -gt 0 ]] || die 'capture needs a command after --'
+
+  label="${label//$'\r'/ }"
+  label="${label//$'\n'/ }"
+
+  local stamp clean outfile relative rc
+  stamp="$(ts)"
+  clean="$(sanitize_label "$label")"
+  outfile="$MANUAL_COMMAND_DIR/${stamp}_${clean}.txt"
+  relative="${outfile#$ROOT_DIR/}"
+
+  warn 'The command line and output are stored verbatim in this workspace.'
+  warn 'Do not place plaintext passwords, tokens, or private keys in command arguments.'
+  run_capture_live "Manual command: $label" "$outfile" "$@"
+  rc="$CAPTURE_LAST_RC"
+
+  ensure_report_commands_file
+  {
+    printf '\n## %s - %s\n\n' "$(date +"%Y-%m-%d %H:%M:%S %Z")" "$label"
+    printf -- '- Output: `%s`\n' "$relative"
+    printf -- '- Exit code: `%s`\n\n' "$rc"
+    printf '```bash\n'
+    command_line "$@"
+    printf '```\n'
+  } >> "$REPORT_COMMANDS_FILE"
+
+  chmod 600 "$outfile" "$REPORT_COMMANDS_FILE"
+  note "Captured command '$label' exit=$rc -> $relative"
+  ok "Command output saved: $relative"
+  ok "Report command index updated: notes/04-report-commands.md"
+
+  return "$rc"
+}
+
 csv_cell() {
   local value="${1:-}"
   value="${value//\"/\"\"}"
@@ -548,6 +637,7 @@ Workflow helpers:
 
 Logging:
   ./scripts/oscp.sh note "message"
+  ./scripts/oscp.sh capture "LABEL" -- COMMAND [ARG ...]
   ./scripts/oscp.sh cred "user:pass (source)"
   ./scripts/oscp.sh add-cred SERVICE USER PASS_OR_HASH [SOURCE]
   ./scripts/oscp.sh hash "<hash> (type/source)"       # log and suggest crack mode
@@ -2709,6 +2799,7 @@ case "$cmd" in
   show-live) shift; show_live ;;
   status) shift; status ;;
   note) shift; note "$*" ;;
+  capture) shift; capture_command "$@" ;;
   cred) shift; cred "$*" ;;
   add-cred) shift; add_cred_structured "${1:-}" "${2:-}" "${3:-}" "${4:-manual}" ;;
   hash) shift; log_hash "$*" ;;

@@ -167,10 +167,14 @@ Web enumeration saves HTTP headers, WhatWeb output, Nikto checks when installed,
 
 ```bash
 ./scripts/oscp.sh note "anonymous SMB share exposes backup.zip"
+./scripts/oscp.sh capture "sudo permissions" -- sudo -l
+./scripts/oscp.sh capture "web response headers" -- curl -k -i https://192.168.56.10/
 ./scripts/oscp.sh cred "bob:Password123 (SMB on 192.168.56.10)"
 ./scripts/oscp.sh add-cred smb bob 'Password123' 'backup.zip config'
 ./scripts/oscp.sh hash "<hash> (source/type)"
 ```
+
+`capture` runs one manual command, shows its output live, saves the combined command/output under `evidence/commands/`, records the exact command and output path in `commands.log`, and appends a report-friendly entry to `notes/04-report-commands.md`. Its exit status matches the captured command. The command and output are stored verbatim, so use interactive prompts or placeholders instead of putting plaintext secrets in arguments.
 
 The workspace contains `notes.md`, `notes/`, `reports/findings.md`, `reports/scoring.md`, `commands.log`, `creds/creds.csv`, service folders, scan output, screenshots, evidence, transfer files, and loot. Keep raw command output in the generated folders and write concise findings in `reports/findings.md`.
 

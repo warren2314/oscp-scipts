@@ -71,9 +71,30 @@ assert_contains "$ad_output" "Domain      : corp.invalid" "AD dispatcher forward
 assert_contains "$ad_output" "Username    : alice" "AD dispatcher forwards username"
 
 help_output="$("$OSCP" --help)"
-assert_contains "$help_output" "2026.08.03-guided" "help expands toolkit version"
+assert_contains "$help_output" "2026.08.04-capture" "help expands toolkit version"
 [[ "$help_output" != *'$TOOLKIT_VERSION'* ]] || fail "help contains literal version variable"
 pass "help has no literal version placeholder"
+
+capture_output="$("$OSCP" capture "identity check" -- printf 'user=%s\n' alice 2>&1)"
+assert_contains "$capture_output" "user=alice" "manual capture shows command output"
+capture_file="$(find "$WORKSPACE/evidence/commands" -maxdepth 1 -type f -name '*_identity_check.txt' -print -quit)"
+[[ -n "$capture_file" && -f "$capture_file" ]] || fail "manual capture output file was not created"
+grep -q 'user=alice' "$capture_file" || fail "manual capture file is missing command output"
+grep -q 'identity check' "$WORKSPACE/notes/04-report-commands.md" || fail "report command index is missing capture label"
+grep -q 'evidence/commands/' "$WORKSPACE/notes/04-report-commands.md" || fail "report command index is missing output path"
+grep -q 'printf' "$WORKSPACE/commands.log" || fail "commands.log is missing captured command"
+pass "manual command capture is indexed"
+
+set +e
+failure_output="$("$OSCP" capture "expected failure" -- bash -c 'echo expected-error; exit 7' 2>&1)"
+failure_rc=$?
+set -e
+[[ "$failure_rc" -eq 7 ]] || fail "manual capture did not preserve command exit status"
+assert_contains "$failure_output" "expected-error" "failed command output remains visible"
+failure_file="$(find "$WORKSPACE/evidence/commands" -maxdepth 1 -type f -name '*_expected_failure.txt' -print -quit)"
+[[ -n "$failure_file" && -f "$failure_file" ]] || fail "failed capture output file was not created"
+grep -q '\[exit-code: 7\]' "$failure_file" || fail "failed capture file is missing exit status"
+pass "failed command capture preserves evidence and exit status"
 
 cat >> "$WORKSPACE/.oscp_env" <<'EOF'
 OSCP_DISCOVERY_PORTS=53,88,445

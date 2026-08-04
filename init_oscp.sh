@@ -290,8 +290,8 @@ EOF
 cat > "$ROOT/notes/04-report-commands.md" <<'EOF'
 # Report Command Log
 
-Paste the important commands here in order.
-Keep raw output in the generated scan/service folders.
+Commands recorded with `./scripts/oscp.sh capture` are appended here in order.
+Add any other important commands manually, and keep raw output in the generated scan/service folders.
 EOF
 
 cat > "$ROOT/reports/findings.md" <<EOF
