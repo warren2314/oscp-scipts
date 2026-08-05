@@ -383,14 +383,12 @@ printf 'standalone\n' > "$ROOT/reports/profile.txt"
 printf 'setup\n' > "$ROOT/reports/phase.txt"
 
 ENV_SUBNET="$SUBNET"
-if [[ -z "$ENV_SUBNET" && -n "$TARGET" ]]; then
-  ENV_SUBNET="$(infer_subnet_24 "$TARGET" || true)"
-fi
 
 {
   echo "# OSCP toolkit workspace state"
   [[ -n "$TARGET" ]] && printf 'OSCP_TARGET=%s\n' "$TARGET"
   [[ -n "$ENV_SUBNET" ]] && printf 'OSCP_SUBNET=%s\n' "$ENV_SUBNET"
+  [[ -n "$ENV_SUBNET" ]] && echo "OSCP_SCOPE_EXPLICIT=1"
   echo "OSCP_WORDLIST=/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt"
   echo "OSCP_VHOST_WORDLIST=/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt"
 } > "$ROOT/.oscp_env"
@@ -421,6 +419,12 @@ CLI workflow:
   ./scripts/oscp.sh status
   ./scripts/oscp.sh guide
   ./scripts/oscp.sh set-target <ip> [cidr]
+  ./scripts/oscp.sh set-subnet <cidr>
+  ./scripts/oscp.sh discover
+  ./scripts/oscp.sh nmap-full-all
+  ./scripts/oscp.sh nmap-deep-all
+  ./scripts/oscp.sh ad-candidates
+  ./scripts/oscp.sh set-dc <ip>
   ./scripts/oscp.sh nmap-full
   ./scripts/oscp.sh nmap-deep
   ./scripts/oscp.sh suggest

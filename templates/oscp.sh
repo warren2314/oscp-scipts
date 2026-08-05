@@ -8,7 +8,7 @@
 set -euo pipefail
 umask 077
 
-TOOLKIT_VERSION="2026.08.05-saved-target"
+TOOLKIT_VERSION="2026.08.05-ad-multihost"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCANS_DIR="$ROOT_DIR/scans"
 DISC_DIR="$SCANS_DIR/discovery"
@@ -83,6 +83,52 @@ is_cidr() {
   (( 10#$prefix >= 0 && 10#$prefix <= 32 ))
 }
 
+ipv4_to_int() {
+  local ip="${1:-}"
+  is_ipv4 "$ip" || return 1
+  local a b c d
+  IFS=. read -r a b c d <<< "$ip"
+  printf '%u\n' "$(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d ))"
+}
+
+ip_in_cidr() {
+  local ip="${1:-}"
+  local cidr="${2:-}"
+  is_ipv4 "$ip" || return 1
+  is_cidr "$cidr" || return 1
+
+  local prefix="${cidr#*/}"
+  local network_ip="${cidr%/*}"
+  local ip_int network_int mask
+  ip_int="$(ipv4_to_int "$ip")"
+  network_int="$(ipv4_to_int "$network_ip")"
+  if (( 10#$prefix == 0 )); then
+    mask=0
+  else
+    mask=$(( (0xFFFFFFFF << (32 - 10#$prefix)) & 0xFFFFFFFF ))
+  fi
+  (( (ip_int & mask) == (network_int & mask) ))
+}
+
+is_cidr_network_address() {
+  local ip="${1:-}"
+  local cidr="${2:-}"
+  is_ipv4 "$ip" || return 1
+  is_cidr "$cidr" || return 1
+  ip_in_cidr "$ip" "$cidr" || return 1
+
+  local prefix="${cidr#*/}"
+  (( 10#$prefix <= 30 )) || return 1
+  local ip_int mask
+  ip_int="$(ipv4_to_int "$ip")"
+  if (( 10#$prefix == 0 )); then
+    mask=0
+  else
+    mask=$(( (0xFFFFFFFF << (32 - 10#$prefix)) & 0xFFFFFFFF ))
+  fi
+  (( (ip_int & mask) == ip_int ))
+}
+
 require_ipv4() {
   local value="${1:-}"
   local label="${2:-IP}"
@@ -153,6 +199,12 @@ load_env_file() {
       OSCP_SUBNET)
         if is_cidr "$val"; then OSCP_SUBNET="$val"; else warn "Ignoring invalid OSCP_SUBNET in .oscp_env"; fi
         ;;
+      OSCP_DC)
+        if is_ipv4 "$val"; then OSCP_DC="$val"; else warn "Ignoring invalid OSCP_DC in .oscp_env"; fi
+        ;;
+      OSCP_SCOPE_EXPLICIT)
+        [[ "$val" == "1" ]] && OSCP_SCOPE_EXPLICIT=1
+        ;;
       OSCP_WORDLIST)
         [[ -n "$val" ]] && OSCP_WORDLIST="$val"
         ;;
@@ -184,6 +236,8 @@ save_env_file() {
     echo "# OSCP toolkit workspace state"
     [[ -n "$target" ]] && printf 'OSCP_TARGET=%s\n' "$target"
     [[ -n "$subnet" ]] && printf 'OSCP_SUBNET=%s\n' "$subnet"
+    [[ -n "${OSCP_DC:-}" ]] && printf 'OSCP_DC=%s\n' "$OSCP_DC"
+    [[ -n "$subnet" && "${OSCP_SCOPE_EXPLICIT:-0}" == "1" ]] && printf 'OSCP_SCOPE_EXPLICIT=1\n'
     [[ -n "${OSCP_DOMAIN:-}" ]] && printf 'OSCP_DOMAIN=%s\n' "$OSCP_DOMAIN"
     printf 'OSCP_WORDLIST=%s\n' "${OSCP_WORDLIST:-/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt}"
     printf 'OSCP_VHOST_WORDLIST=%s\n' "${OSCP_VHOST_WORDLIST:-/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt}"
@@ -457,9 +511,57 @@ target_or_default() {
   printf '%s\n' "$target"
 }
 
+live_host_count() {
+  [[ -f "$LIVE_HOSTS" ]] || { printf '0\n'; return 0; }
+  awk 'NF && $1 !~ /^#/ {count++} END {print count+0}' "$LIVE_HOSTS"
+}
+
+validate_live_hosts_for_scope() {
+  load_env_file
+  [[ -n "${OSCP_SUBNET:-}" ]] || die "No saved subnet scope. Run set-subnet CIDR first."
+  [[ "${OSCP_SCOPE_EXPLICIT:-0}" == "1" ]] || die "Subnet scope has not been explicitly confirmed. Run set-subnet ${OSCP_SUBNET}."
+  [[ -s "$LIVE_HOSTS" ]] || die "$LIVE_HOSTS missing or empty. Run discover first."
+
+  local ip count=0
+  while IFS= read -r ip || [[ -n "$ip" ]]; do
+    ip="${ip%%[[:space:]]*}"
+    [[ -z "$ip" || "$ip" == \#* ]] && continue
+    is_ipv4 "$ip" || die "Invalid entry in $LIVE_HOSTS: $ip"
+    ip_in_cidr "$ip" "$OSCP_SUBNET" || die "Refusing batch scan: $ip is outside saved scope $OSCP_SUBNET"
+    count=$((count + 1))
+  done < "$LIVE_HOSTS"
+  (( count > 0 )) || die "$LIVE_HOSTS contains no valid hosts. Run discover first."
+}
+
 ports_file_for() {
   local target="${1:?target required}"
   printf '%s/%s_open_ports.txt\n' "$NMAP_DIR" "$target"
+}
+
+latest_full_scan_for() {
+  local target="${1:?target required}"
+  ls -t "$NMAP_DIR/${target}_full_"*.nmap 2>/dev/null | head -n 1 || true
+}
+
+deep_completion_marker_for() {
+  local target="${1:?target required}"
+  printf '%s/%s_deep_complete\n' "$NMAP_DIR" "$target"
+}
+
+full_scan_complete_for() {
+  [[ -n "$(latest_full_scan_for "${1:?target required}")" ]]
+}
+
+deep_scan_complete_for() {
+  local target="${1:?target required}"
+  local full deep marker expected
+  full="$(latest_full_scan_for "$target")"
+  [[ -n "$full" ]] || return 1
+  deep="$(latest_deep_scan_for "$target")"
+  marker="$(deep_completion_marker_for "$target")"
+  expected="$(basename "$full")"
+  [[ -s "$marker" && "$(head -n 1 "$marker" 2>/dev/null)" == "$expected" ]] && return 0
+  [[ -n "$deep" && "$deep" -nt "$full" ]]
 }
 
 get_ports_for_target() {
@@ -588,6 +690,8 @@ Version:
 
 Setup:
   ./scripts/oscp.sh set-target <IP> [CIDR]
+  ./scripts/oscp.sh set-subnet <CIDR>          # save exact AD/subnet scope
+  ./scripts/oscp.sh set-dc <IP>                # choose from discovered hosts
   ./scripts/oscp.sh set-domain <DOMAIN>
   ./scripts/oscp.sh context
   ./scripts/oscp.sh status
@@ -597,10 +701,13 @@ Discovery and scanning:
   ./scripts/oscp.sh discover-wide [CIDR]       # wider live-host sweep
   ./scripts/oscp.sh nmap-live                  # -sC -sV against live_hosts.txt
   ./scripts/oscp.sh nmap-full [IP]             # full TCP scan, saves port list
+  ./scripts/oscp.sh nmap-full-all              # full TCP scan of every live host
   ./scripts/oscp.sh nmap-deep [IP]             # scripts/versions on found ports
+  ./scripts/oscp.sh nmap-deep-all              # deep scan of every live host
   ./scripts/oscp.sh nmap-udp [IP]              # top-100 UDP
   ./scripts/oscp.sh nmap-vuln [IP]             # optional nmap vuln scripts
   ./scripts/oscp.sh ports [IP]                 # show saved open TCP ports
+  ./scripts/oscp.sh ad-candidates              # rank discovered DC candidates
 
 Service enumeration:
   ./scripts/oscp.sh enum-all [IP]              # service enum based on nmap-full
@@ -646,8 +753,9 @@ Logging:
   ./scripts/oscp.sh hash-guess "<hash>"               # suggest crack mode only
 
 Environment:
-  .oscp_env supports OSCP_TARGET, OSCP_SUBNET, OSCP_DOMAIN, OSCP_WORDLIST,
-  OSCP_VHOST_WORDLIST, OSCP_DISCOVERY_PORTS, OSCP_DISCOVERY_PORTS_WIDE.
+  .oscp_env supports OSCP_TARGET, OSCP_SUBNET, OSCP_DC, OSCP_DOMAIN,
+  OSCP_WORDLIST, OSCP_VHOST_WORDLIST, OSCP_DISCOVERY_PORTS,
+  OSCP_DISCOVERY_PORTS_WIDE.
   OSCP_YES=1 skips confirmation prompts.
 USAGE
 }
@@ -659,11 +767,11 @@ _run_discover() {
   load_env_file
   local target="${OSCP_TARGET:-${TARGET:-}}"
   local subnet="${subnet_arg:-${OSCP_SUBNET:-${SUBNET:-}}}"
-  if [[ -z "$subnet" && -n "$target" ]]; then
-    subnet="$(infer_subnet_24 "$target" || true)"
-  fi
-  [[ -n "$subnet" ]] || die "No subnet. Set OSCP_SUBNET or OSCP_TARGET."
+  [[ -n "$subnet" ]] || die "No explicit subnet scope. Run set-subnet CIDR or pass a CIDR."
   require_cidr "$subnet"
+  if [[ -z "$subnet_arg" && "${OSCP_SCOPE_EXPLICIT:-0}" != "1" ]]; then
+    die "Saved subnet has not been explicitly confirmed. Run set-subnet $subnet."
+  fi
   [[ "$ports" =~ ^[0-9,]+$ ]] || die "Invalid port list: $ports"
 
   confirm_scope "$subnet"
@@ -676,7 +784,9 @@ _run_discover() {
   run_sudo nmap -Pn -n -sS -T4 --open --min-rate 2000 -p "$ports" "$subnet" -oA "$out"
   fix_scan_perms "$out"
 
-  awk '/Status: Up/{print $2}' "${out}.gnmap" | sort -u | tee "$LIVE_HOSTS" >/dev/null
+  # With -Pn, Nmap emits "Status: Up" even when a host never responded. Only
+  # retain hosts that actually returned at least one open discovery port.
+  awk '/Ports:/ && /\/open\// {print $2}' "${out}.gnmap" | sort -u > "$LIVE_HOSTS"
   append_new_ips_to_hosts_txt "$LIVE_HOSTS"
   note "Discovery $subnet -> $(basename "$out").[nmap|gnmap|xml]"
   ok "Discovery saved: ${out}.[nmap|gnmap|xml]"
@@ -697,7 +807,7 @@ discover_wide() {
 
 nmap_live() {
   load_env_file
-  [[ -s "$LIVE_HOSTS" ]] || die "$LIVE_HOSTS missing or empty. Run discover first."
+  validate_live_hosts_for_scope
   local stamp out
   stamp="$(ts)"
   out="$NMAP_DIR/live_scv_top1000_${stamp}"
@@ -705,6 +815,49 @@ nmap_live() {
   fix_scan_perms "$out"
   note "Nmap live -> $(basename "$out").[nmap|gnmap|xml]"
   ok "Live scan saved: ${out}.[nmap|gnmap|xml]"
+}
+
+nmap_full_all() {
+  validate_live_hosts_for_scope
+  local ip index=0 total
+  total="$(live_host_count)"
+  info "Full TCP scanning $total discovered host(s) in $OSCP_SUBNET"
+  while IFS= read -r ip || [[ -n "$ip" ]]; do
+    ip="${ip%%[[:space:]]*}"
+    [[ -z "$ip" || "$ip" == \#* ]] && continue
+    index=$((index + 1))
+    echo
+    info "Host $index/$total: $ip"
+    nmap_full "$ip"
+  done < "$LIVE_HOSTS"
+  task_set_state "tcp-full" "done" 1
+  note "Full TCP coverage complete for $total discovered hosts in $OSCP_SUBNET"
+  ok "Full TCP scans complete: $total/$total hosts"
+}
+
+nmap_deep_all() {
+  validate_live_hosts_for_scope
+  local ip index=0 total
+  total="$(live_host_count)"
+
+  while IFS= read -r ip || [[ -n "$ip" ]]; do
+    ip="${ip%%[[:space:]]*}"
+    [[ -z "$ip" || "$ip" == \#* ]] && continue
+    full_scan_complete_for "$ip" || die "No completed full scan for $ip. Run nmap-full-all first."
+  done < "$LIVE_HOSTS"
+
+  info "Deep scanning $total discovered host(s) using their saved port lists"
+  while IFS= read -r ip || [[ -n "$ip" ]]; do
+    ip="${ip%%[[:space:]]*}"
+    [[ -z "$ip" || "$ip" == \#* ]] && continue
+    index=$((index + 1))
+    echo
+    info "Host $index/$total: $ip"
+    nmap_deep "$ip"
+  done < "$LIVE_HOSTS"
+  task_set_state "tcp-deep" "done" 1
+  note "Deep TCP coverage complete for $total discovered hosts in $OSCP_SUBNET"
+  ok "Deep scans complete: $total/$total hosts"
 }
 
 nmap_full() {
@@ -727,16 +880,29 @@ nmap_full() {
   ok "Open TCP ports: ${found:-<none>}"
   ok "Saved port list: $ports_file"
   note "Nmap full $target -> ports: ${found:-<none>}"
-  task_set_state "tcp-full" "done" 1
+  if [[ "$(current_profile)" != "ad" || ! -s "$LIVE_HOSTS" ]]; then
+    task_set_state "tcp-full" "done" 1
+  fi
 }
 
 nmap_deep() {
   local target
   target="$(target_or_default "${1:-}")"
 
-  local ports=""
+  local ports="" full_scan ports_file completion_marker
+  full_scan="$(latest_full_scan_for "$target")"
+  ports_file="$(ports_file_for "$target")"
+  completion_marker="$(deep_completion_marker_for "$target")"
   if ports="$(get_ports_for_target "$target")"; then
     info "Using saved ports: $ports"
+  elif [[ -n "$full_scan" && -f "$ports_file" ]]; then
+    info "Full TCP scan found no open ports on $target; no deep scan is required."
+    basename "$full_scan" > "$completion_marker"
+    note "Nmap deep $target -> skipped; full TCP scan found no open ports"
+    if [[ "$(current_profile)" != "ad" || ! -s "$LIVE_HOSTS" ]]; then
+      task_set_state "tcp-deep" "done" 1
+    fi
+    return 0
   else
     warn "No saved full-scan ports for $target. Falling back to top 1000."
   fi
@@ -750,9 +916,16 @@ nmap_deep() {
     run_sudo nmap -sC -sV -A --version-all -Pn -n --reason "$target" -oA "$out"
   fi
   fix_scan_perms "$out"
+  if [[ -n "$full_scan" ]]; then
+    basename "$full_scan" > "$completion_marker"
+  else
+    printf 'no-full-scan\n' > "$completion_marker"
+  fi
   note "Nmap deep $target -> $(basename "$out").[nmap|gnmap|xml]"
   ok "Deep scan saved: ${out}.[nmap|gnmap|xml]"
-  task_set_state "tcp-deep" "done" 1
+  if [[ "$(current_profile)" != "ad" || ! -s "$LIVE_HOSTS" ]]; then
+    task_set_state "tcp-deep" "done" 1
+  fi
 }
 
 nmap_udp() {
@@ -1226,7 +1399,7 @@ EOF
 
 ad_helper() {
   load_env_file
-  local target="${1:-${OSCP_TARGET:-TARGET}}"
+  local target="${1:-${OSCP_DC:-TARGET}}"
   if [[ "$target" != "TARGET" ]]; then
     require_ipv4 "$target" "AD target"
   fi
@@ -1759,7 +1932,7 @@ ensure_progress_file() {
     cat > "$PROGRESS_FILE" <<'EOF'
 id	profile	state	label
 scope-confirmed	all	todo	Confirm scope, objectives, and current exam rules
-target-set	all	todo	Save the current target and subnet
+target-set	all	todo	Save the current target or exact subnet scope
 tcp-full	all	todo	Complete and save a full TCP scan
 tcp-deep	all	todo	Complete scripts and version detection
 service-enum	all	todo	Enumerate every discovered service
@@ -1787,7 +1960,9 @@ context_helper() {
   load_env_file
   printf 'target=%s\n' "${OSCP_TARGET:-}"
   printf 'subnet=%s\n' "${OSCP_SUBNET:-}"
+  printf 'dc=%s\n' "${OSCP_DC:-}"
   printf 'domain=%s\n' "${OSCP_DOMAIN:-}"
+  printf 'scope_explicit=%s\n' "${OSCP_SCOPE_EXPLICIT:-0}"
   printf 'profile=%s\n' "$(current_profile)"
 }
 
@@ -1926,17 +2101,47 @@ guide() {
   load_env_file
   ensure_progress_file
 
-  local profile phase focus target ports deep_scan cred_count hash_count shot_count
-  local done_count total_count
+  local profile phase focus target subnet dc ports cred_count hash_count shot_count
+  local done_count total_count live_count=0 full_count=0 deep_count=0 ip
+  local full_complete=0 deep_complete=0 active_display
   profile="$(current_profile)"
   phase="$(current_phase)"
   focus="$(focus_helper)"
   target="${OSCP_TARGET:-}"
-  [[ -n "$target" ]] && task_set_state "target-set" "done" 1
+  subnet="${OSCP_SUBNET:-}"
+  dc="${OSCP_DC:-}"
+  active_display="${target:-<not selected>}"
+
+  if [[ "$profile" == "ad" && -n "$target" && -n "$subnet" && -z "$dc" ]] && \
+     is_cidr_network_address "$target" "$subnet"; then
+    active_display="<network address; rerun setup>"
+  fi
+
+  if [[ "$profile" == "ad" ]]; then
+    if [[ -n "$subnet" && "${OSCP_SCOPE_EXPLICIT:-0}" == "1" ]]; then
+      task_set_state "target-set" "done" 1
+    fi
+    live_count="$(live_host_count)"
+    if (( live_count > 0 )); then
+      while IFS= read -r ip || [[ -n "$ip" ]]; do
+        ip="${ip%%[[:space:]]*}"
+        [[ -z "$ip" || "$ip" == \#* ]] && continue
+        full_scan_complete_for "$ip" && full_count=$((full_count + 1))
+        deep_scan_complete_for "$ip" && deep_count=$((deep_count + 1))
+      done < "$LIVE_HOSTS"
+      (( full_count == live_count )) && task_set_state "tcp-full" "done" 1
+      (( deep_count == live_count )) && task_set_state "tcp-deep" "done" 1
+    fi
+  else
+    [[ -n "$target" ]] && task_set_state "target-set" "done" 1
+  fi
+
   ports=""
-  deep_scan=""
   [[ -n "$target" ]] && ports="$(get_ports_for_target "$target" || true)"
-  [[ -n "$target" ]] && deep_scan="$(latest_deep_scan_for "$target")"
+  if [[ -n "$target" ]]; then
+    full_scan_complete_for "$target" && full_complete=1
+    deep_scan_complete_for "$target" && deep_complete=1
+  fi
   cred_count=0
   hash_count=0
   shot_count=0
@@ -1952,7 +2157,13 @@ guide() {
   echo " GUIDED DASHBOARD"
   echo "============================================================"
   printf ' Profile : %-12s Phase: %s\n' "$profile" "$phase"
-  printf ' Target  : %-15s Ports: %s\n' "${target:-<not set>}" "${ports:-<not scanned>}"
+  if [[ "$profile" == "ad" ]]; then
+    printf ' Scope   : %-18s Live hosts: %s\n' "${subnet:-<not set>}" "$live_count"
+    printf ' Scans   : full %s/%s          deep %s/%s\n' "$full_count" "$live_count" "$deep_count" "$live_count"
+    printf ' Active  : %-18s DC: %s\n' "$active_display" "${dc:-<select after scans>}"
+  else
+    printf ' Target  : %-15s Ports: %s\n' "${target:-<not set>}" "${ports:-<not scanned>}"
+  fi
   printf ' Progress: %s/%s tasks    Creds: %s  Hashes: %s  Shots: %s\n' "$done_count" "$total_count" "$cred_count" "$hash_count" "$shot_count"
   printf ' Focus   : %s\n' "$focus"
   echo "------------------------------------------------------------"
@@ -1967,23 +2178,63 @@ guide() {
   echo "------------------------------------------------------------"
   echo " RECOMMENDED NEXT COMMANDS"
 
-  if [[ -z "$target" ]]; then
-    echo "  ./scripts/oscp.sh set-target TARGET_IP [SUBNET_CIDR]"
-  elif [[ -z "$ports" ]]; then
+  if [[ "$profile" == "ad" ]]; then
+    if [[ -z "$subnet" ]]; then
+      echo "  ./scripts/oscp.sh set-subnet AD_SUBNET_CIDR"
+    elif [[ "${OSCP_SCOPE_EXPLICIT:-0}" != "1" ]]; then
+      echo "  ./scripts/oscp.sh set-subnet $subnet   # confirm exact scope"
+    elif (( live_count == 0 )); then
+      echo "  ./scripts/oscp.sh discover"
+    elif (( full_count < live_count )); then
+      echo "  ./scripts/oscp.sh nmap-full-all"
+    elif (( deep_count < live_count )); then
+      echo "  ./scripts/oscp.sh nmap-deep-all"
+    elif [[ -z "$dc" ]]; then
+      echo "  ./scripts/oscp.sh ad-candidates"
+      echo "  ./scripts/oscp.sh set-dc DC_IP"
+    else
+      case "$phase" in
+        setup|enum)
+          echo "  ./scripts/oscp.sh ports"
+          echo "  ./scripts/oscp.sh suggest"
+          echo "  ./scripts/oscp.sh ad $dc DOMAIN USER"
+          echo "  ./scripts/oscp.sh reference ad"
+          ;;
+        foothold)
+          echo "  ./scripts/oscp.sh phase lateral"
+          echo "  ./scripts/oscp.sh reference lateral"
+          echo "  ./scripts/oscp.sh focus \"re-enumerate with new access\""
+          ;;
+        privesc|lateral)
+          echo "  ./scripts/oscp.sh reference lateral"
+          echo "  ./scripts/oscp.sh task list"
+          ;;
+        proof)
+          echo "  ./scripts/oscp.sh proof proof"
+          echo "  ./scripts/oscp.sh screenshot \"proof with ip visible\""
+          echo "  ./scripts/oscp.sh phase report"
+          ;;
+        report)
+          echo "  ./scripts/oscp.sh task list"
+          echo "  Review reports/findings.md, commands.log, and evidence/screenshots.md"
+          ;;
+        done)
+          echo "  Recheck control-panel submissions and final report artifacts."
+          ;;
+      esac
+    fi
+  elif [[ -z "$target" ]]; then
+    echo "  ./scripts/oscp.sh set-target TARGET_IP"
+  elif (( full_complete == 0 )); then
     echo "  ./scripts/oscp.sh nmap-full"
-  elif [[ -z "$deep_scan" ]]; then
+  elif (( deep_complete == 0 )); then
     echo "  ./scripts/oscp.sh nmap-deep"
   else
     case "$phase" in
       setup|enum)
         echo "  ./scripts/oscp.sh ports"
         echo "  ./scripts/oscp.sh suggest"
-        if [[ "$profile" == "ad" ]]; then
-          echo "  ./scripts/oscp.sh ad $target DOMAIN USER"
-          echo "  ./scripts/oscp.sh reference ad"
-        else
-          echo "  ./scripts/oscp.sh enum-all"
-        fi
+        echo "  ./scripts/oscp.sh enum-all"
         ;;
       foothold)
         echo "  ./scripts/oscp.sh phase privesc"
@@ -2722,6 +2973,50 @@ EOF
   ok "Index updated: $SCREENSHOT_INDEX"
 }
 
+ad_candidates() {
+  validate_live_hosts_for_scope
+  local ip ports signal likely_count=0 scanned_count=0
+
+  echo "============================================================"
+  echo " AD HOST / DC CANDIDATES"
+  echo "============================================================"
+  printf ' %-15s %-13s %s\n' "IP" "DC SIGNAL" "OPEN TCP PORTS"
+  printf ' %-15s %-13s %s\n' "---------------" "-------------" "------------------------------"
+  while IFS= read -r ip || [[ -n "$ip" ]]; do
+    ip="${ip%%[[:space:]]*}"
+    [[ -z "$ip" || "$ip" == \#* ]] && continue
+    ports="$(get_ports_for_target "$ip" || true)"
+    signal="not scanned"
+    if full_scan_complete_for "$ip"; then
+      scanned_count=$((scanned_count + 1))
+      signal="member/other"
+      if has_tcp_port "$ports" 88 && has_tcp_port "$ports" 445 && \
+         (has_tcp_port "$ports" 389 || has_tcp_port "$ports" 636 || \
+          has_tcp_port "$ports" 3268 || has_tcp_port "$ports" 3269); then
+        signal="LIKELY DC"
+        likely_count=$((likely_count + 1))
+      elif has_tcp_port "$ports" 88 || has_tcp_port "$ports" 389 || \
+           has_tcp_port "$ports" 636 || has_tcp_port "$ports" 3268 || \
+           has_tcp_port "$ports" 3269; then
+        signal="AD services"
+      fi
+    fi
+    printf ' %-15s %-13s %s\n' "$ip" "$signal" "${ports:-<none/not saved>}"
+  done < "$LIVE_HOSTS"
+  echo "------------------------------------------------------------"
+  if (( scanned_count == 0 )); then
+    echo "Run ./scripts/oscp.sh nmap-full-all before choosing the DC."
+  elif (( likely_count == 1 )); then
+    echo "One likely DC was found. Confirm it, then run:"
+    echo "  ./scripts/oscp.sh set-dc DC_IP"
+  elif (( likely_count > 1 )); then
+    echo "Multiple DC-like hosts were found; inspect the deep scans and select one."
+  else
+    echo "No strong DC signature was found. Inspect deep scans before selecting one."
+  fi
+  echo "============================================================"
+}
+
 show_live() {
   [[ -s "$LIVE_HOSTS" ]] && nl -ba "$LIVE_HOSTS" || echo "[-] No live hosts yet."
 }
@@ -2733,6 +3028,7 @@ status() {
   echo " Version   : $TOOLKIT_VERSION"
   echo " Target    : ${OSCP_TARGET:-<not set>}"
   echo " Subnet    : ${OSCP_SUBNET:-<not set>}"
+  echo " DC        : ${OSCP_DC:-<not selected>}"
   echo " Domain    : ${OSCP_DOMAIN:-<not set>}"
   echo " Wordlist  : ${OSCP_WORDLIST:-<default>}"
   echo " Vhosts    : ${OSCP_VHOST_WORDLIST:-<default>}"
@@ -2756,13 +3052,92 @@ set_target() {
   local target="${1:-}"
   local subnet="${2:-}"
   load_env_file
+  local previous_subnet="${OSCP_SUBNET:-}"
   [[ -n "$target" ]] || die "set-target needs an IP"
   require_ipv4 "$target" "target"
-  [[ -n "$subnet" ]] || subnet="$(infer_subnet_24 "$target" || true)"
-  [[ -n "$subnet" ]] && require_cidr "$subnet"
+
+  if [[ -n "$subnet" ]]; then
+    require_cidr "$subnet"
+    ip_in_cidr "$target" "$subnet" || die "$target is outside subnet $subnet"
+    if [[ -s "$LIVE_HOSTS" && -n "$previous_subnet" && "$previous_subnet" != "$subnet" ]]; then
+      archive_live_hosts_for_scope_change
+    fi
+    OSCP_SCOPE_EXPLICIT=1
+  elif [[ -n "${OSCP_SUBNET:-}" && "${OSCP_SCOPE_EXPLICIT:-0}" == "1" ]] && \
+       ip_in_cidr "$target" "$OSCP_SUBNET"; then
+    subnet="$OSCP_SUBNET"
+  else
+    subnet=""
+    OSCP_SCOPE_EXPLICIT=0
+    unset OSCP_DC 2>/dev/null || true
+  fi
+  if [[ -n "${OSCP_DC:-}" && -n "$subnet" ]] && ! ip_in_cidr "$OSCP_DC" "$subnet"; then
+    unset OSCP_DC
+  fi
   save_env_file "$target" "$subnet"
   note "Set target=$target subnet=${subnet:-<none>}"
   task_set_state "target-set" "done" 1
+}
+
+archive_live_hosts_for_scope_change() {
+  [[ -s "$LIVE_HOSTS" ]] || return 0
+  local archive="$DISC_DIR/live_hosts_before_scope_change_$(ts).txt"
+  mv "$LIVE_HOSTS" "$archive"
+  ok "Archived previous live-host list: $archive"
+}
+
+set_subnet() {
+  local subnet="${1:-}"
+  load_env_file
+  [[ -n "$subnet" ]] || die "set-subnet needs a CIDR"
+  require_cidr "$subnet"
+
+  local previous_subnet="${OSCP_SUBNET:-}"
+  local previous_scope_explicit="${OSCP_SCOPE_EXPLICIT:-0}"
+  local target="${OSCP_TARGET:-}"
+  local dc="${OSCP_DC:-}"
+  if [[ -s "$LIVE_HOSTS" && ( "$previous_subnet" != "$subnet" || "$previous_scope_explicit" != "1" ) ]]; then
+    archive_live_hosts_for_scope_change
+  fi
+  if [[ -n "$previous_subnet" && "$previous_subnet" != "$subnet" ]]; then
+    target=""
+    dc=""
+  fi
+
+  # Repair older AD workspaces where the network address (for example .0/24)
+  # was accidentally stored as the target/DC before discovery.
+  if [[ -n "$target" ]] && is_cidr_network_address "$target" "$subnet"; then
+    target=""
+    [[ "$dc" == "${OSCP_TARGET:-}" ]] && dc=""
+  fi
+  if [[ -n "$target" ]] && ! ip_in_cidr "$target" "$subnet"; then target=""; fi
+  if [[ -n "$dc" ]] && ! ip_in_cidr "$dc" "$subnet"; then dc=""; fi
+
+  OSCP_SCOPE_EXPLICIT=1
+  if [[ -n "$dc" ]]; then OSCP_DC="$dc"; else unset OSCP_DC 2>/dev/null || true; fi
+  save_env_file "$target" "$subnet"
+  note "Set explicit subnet scope=$subnet"
+  task_set_state "target-set" "done" 1
+}
+
+set_dc() {
+  local dc="${1:-}"
+  [[ -n "$dc" ]] || die "set-dc needs an IP from the discovered host list"
+  require_ipv4 "$dc" "DC IP"
+  validate_live_hosts_for_scope
+  grep -Fxq "$dc" "$LIVE_HOSTS" || die "$dc is not in $LIVE_HOSTS. Run discovery, then select a listed host."
+
+  local ip
+  while IFS= read -r ip || [[ -n "$ip" ]]; do
+    ip="${ip%%[[:space:]]*}"
+    [[ -z "$ip" || "$ip" == \#* ]] && continue
+    full_scan_complete_for "$ip" || die "Scan every discovered host first: run nmap-full-all."
+  done < "$LIVE_HOSTS"
+
+  OSCP_DC="$dc"
+  save_env_file "$dc" "$OSCP_SUBNET"
+  note "Selected DC=$dc and active target=$dc"
+  ok "Saved DC and active target: $dc"
 }
 
 set_domain() {
@@ -2786,15 +3161,20 @@ case "$cmd" in
   task|progress) shift; task_helper "${1:-list}" "${2:-}" ;;
   reference|ref) shift; reference_helper "${1:-list}" ;;
   set-target) shift; set_target "${1:-}" "${2:-}" ;;
+  set-subnet|set-scope) shift; set_subnet "${1:-}" ;;
+  set-dc|select-dc) shift; set_dc "${1:-}" ;;
   set-domain) shift; set_domain "${1:-}" ;;
   discover) shift; discover "${1:-}" ;;
   discover-wide) shift; discover_wide "${1:-}" ;;
   nmap-live) shift; nmap_live ;;
   nmap-full) shift; nmap_full "${1:-}" ;;
+  nmap-full-all|nmap-full-live) shift; nmap_full_all ;;
   nmap-deep) shift; nmap_deep "${1:-}" ;;
+  nmap-deep-all|nmap-deep-live) shift; nmap_deep_all ;;
   nmap-udp) shift; nmap_udp "${1:-}" ;;
   nmap-vuln) shift; nmap_vuln "${1:-}" ;;
   ports) shift; show_ports "${1:-}" ;;
+  ad-candidates|dc-candidates) shift; ad_candidates ;;
   enum-all) shift; enum_all "${1:-}" ;;
   suggest) shift; suggest_next "${1:-}" ;;
   enum-web|web-triage) shift; web_triage "${1:-}" "${2:-}" "${3:-}" ;;

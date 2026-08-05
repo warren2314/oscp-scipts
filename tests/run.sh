@@ -101,7 +101,7 @@ assert_contains "$ad_output" "Domain      : corp.invalid" "AD dispatcher forward
 assert_contains "$ad_output" "Username    : alice" "AD dispatcher forwards username"
 
 help_output="$("$OSCP" --help)"
-assert_contains "$help_output" "2026.08.05-saved-target" "help expands toolkit version"
+assert_contains "$help_output" "2026.08.05-ad-multihost" "help expands toolkit version"
 [[ "$help_output" != *'$TOOLKIT_VERSION'* ]] || fail "help contains literal version variable"
 pass "help has no literal version placeholder"
 
@@ -138,6 +138,157 @@ EOF
 grep -qx 'OSCP_DISCOVERY_PORTS=53,88,445' "$WORKSPACE/.oscp_env" || fail "custom discovery ports were not preserved"
 grep -qx 'OSCP_DISCOVERY_PORTS_WIDE=21,22,80,443' "$WORKSPACE/.oscp_env" || fail "custom wide discovery ports were not preserved"
 pass "set-target preserves discovery configuration"
+
+AD_BASE="$TEST_ROOT/ad-workspaces"
+mkdir -p "$AD_BASE"
+"$REPO_ROOT/init_oscp.sh" -n adsmoke -s 10.0.2.0/24 -b "$AD_BASE" >/dev/null
+AD_WORKSPACE="$(find "$AD_BASE" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+[[ -n "$AD_WORKSPACE" && -d "$AD_WORKSPACE" ]] || fail "AD workspace was not created"
+AD_OSCP="$AD_WORKSPACE/scripts/oscp.sh"
+"$AD_OSCP" profile ad >/dev/null
+
+# Reproduce an older workspace that stored the CIDR network address as its DC.
+"$AD_OSCP" set-target 10.0.2.0 10.0.2.0/24 >/dev/null
+guided_ad_output="$({ echo 1; echo; echo; echo n; echo; echo q; } | "$AD_WORKSPACE/scripts/guided.sh" 2>&1)"
+[[ "$guided_ad_output" != *'Target/DC IP:'* ]] || fail "AD setup still asks for a DC before scanning"
+assert_contains "$guided_ad_output" "DC selection comes later" "AD setup explains post-scan DC selection"
+ad_context="$("$AD_OSCP" context)"
+assert_contains "$ad_context" "subnet=10.0.2.0/24" "AD setup saves subnet scope"
+assert_contains "$ad_context" "scope_explicit=1" "AD setup confirms exact subnet scope"
+! grep -q '^OSCP_TARGET=' "$AD_WORKSPACE/.oscp_env" || fail "AD setup did not clear the legacy network-address target"
+! grep -q '^OSCP_DC=' "$AD_WORKSPACE/.oscp_env" || fail "AD setup selected a DC before discovery"
+pass "AD setup is subnet-first and repairs legacy network-address targets"
+
+ad_guide="$("$AD_OSCP" guide)"
+assert_contains "$ad_guide" "Scope   : 10.0.2.0/24" "AD dashboard displays subnet scope"
+assert_contains "$ad_guide" "./scripts/oscp.sh discover" "AD dashboard recommends discovery first"
+[[ "$ad_guide" != *'nmap-full 10.0.2.0'* ]] || fail "AD dashboard recommends scanning the network address"
+
+cat > "$FAKE_BIN/sudo" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == "chown" ]]; then
+  exit 0
+fi
+exec "$@"
+EOF
+chmod +x "$FAKE_BIN/sudo"
+
+cat > "$FAKE_BIN/nmap" <<'EOF'
+#!/usr/bin/env bash
+out=""
+target=""
+original_args="$*"
+while (( $# > 0 )); do
+  case "$1" in
+    -oA)
+      out="$2"
+      shift 2
+      ;;
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*)
+      target="$1"
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+[[ -n "$out" ]] || { echo "fake nmap: missing -oA" >&2; exit 2; }
+mkdir -p "$(dirname "$out")"
+[[ -z "$FAKE_NMAP_LOG" ]] || echo "$original_args" >> "$FAKE_NMAP_LOG"
+
+if [[ "$target" == */* ]]; then
+  cat > "$out.gnmap" <<'GNMAP'
+Host: 10.0.2.10 () Status: Up
+Host: 10.0.2.10 () Ports: 53/open/tcp//domain///, 88/open/tcp//kerberos-sec///, 389/open/tcp//ldap///, 445/open/tcp//microsoft-ds///
+Host: 10.0.2.20 () Status: Up
+Host: 10.0.2.20 () Ports: 135/open/tcp//msrpc///, 445/open/tcp//microsoft-ds///
+Host: 10.0.2.99 () Status: Up
+GNMAP
+  echo discovery > "$out.nmap"
+else
+  case "$target" in
+    10.0.2.10)
+      cat > "$out.nmap" <<'NMAP'
+53/tcp open domain
+88/tcp open kerberos-sec
+389/tcp open ldap
+445/tcp open microsoft-ds
+NMAP
+      ;;
+    10.0.2.20)
+      cat > "$out.nmap" <<'NMAP'
+135/tcp open msrpc
+445/tcp open microsoft-ds
+3389/tcp open ms-wbt-server
+NMAP
+      ;;
+    *) echo '445/tcp open microsoft-ds' > "$out.nmap" ;;
+  esac
+  echo "Host: $target () Ports: 445/open/tcp//microsoft-ds///" > "$out.gnmap"
+fi
+echo '<nmaprun/>' > "$out.xml"
+EOF
+chmod +x "$FAKE_BIN/nmap"
+
+NMAP_LOG="$TEST_ROOT/fake-nmap.log"
+env PATH="$FAKE_BIN:$PATH" OSCP_YES=1 FAKE_NMAP_LOG="$NMAP_LOG" "$AD_OSCP" discover >/dev/null
+[[ "$(wc -l < "$AD_WORKSPACE/scans/live_hosts.txt" | tr -d ' ')" == "2" ]] || fail "discovery did not save exactly two responsive hosts"
+grep -qx '10.0.2.10' "$AD_WORKSPACE/scans/live_hosts.txt" || fail "discovery missed the DC candidate"
+grep -qx '10.0.2.20' "$AD_WORKSPACE/scans/live_hosts.txt" || fail "discovery missed the member host"
+! grep -qx '10.0.2.99' "$AD_WORKSPACE/scans/live_hosts.txt" || fail "discovery trusted a -Pn Status: Up line with no open port"
+pass "discovery keeps only hosts with observed open ports"
+
+cp "$AD_WORKSPACE/scans/live_hosts.txt" "$TEST_ROOT/live-hosts.good"
+echo '10.0.3.50' >> "$AD_WORKSPACE/scans/live_hosts.txt"
+: > "$NMAP_LOG"
+set +e
+scope_guard_output="$(env PATH="$FAKE_BIN:$PATH" OSCP_YES=1 FAKE_NMAP_LOG="$NMAP_LOG" "$AD_OSCP" nmap-full-all 2>&1)"
+scope_guard_rc=$?
+set -e
+[[ "$scope_guard_rc" -ne 0 ]] || fail "batch scan accepted an out-of-scope host"
+assert_contains "$scope_guard_output" "outside saved scope" "batch scan reports the out-of-scope host"
+[[ ! -s "$NMAP_LOG" ]] || fail "batch scan started before validating the complete host list"
+mv "$TEST_ROOT/live-hosts.good" "$AD_WORKSPACE/scans/live_hosts.txt"
+pass "batch scan validates all hosts before starting"
+
+: > "$NMAP_LOG"
+env PATH="$FAKE_BIN:$PATH" OSCP_YES=1 FAKE_NMAP_LOG="$NMAP_LOG" "$AD_OSCP" nmap-full-all >/dev/null
+[[ "$(grep -c -- '-p-' "$NMAP_LOG")" == "2" ]] || fail "full-all did not run one full scan per discovered host"
+grep -q '10.0.2.10' "$NMAP_LOG" || fail "full-all did not scan the DC candidate"
+grep -q '10.0.2.20' "$NMAP_LOG" || fail "full-all did not scan the member host"
+[[ -f "$AD_WORKSPACE/scans/nmap/10.0.2.10_open_ports.txt" ]] || fail "DC candidate port file is missing"
+[[ -f "$AD_WORKSPACE/scans/nmap/10.0.2.20_open_ports.txt" ]] || fail "member-host port file is missing"
+pass "full-all creates independent scan state for every discovered host"
+
+candidate_output="$("$AD_OSCP" ad-candidates)"
+assert_contains "$candidate_output" "10.0.2.10" "candidate table includes discovered DC host"
+assert_contains "$candidate_output" "LIKELY DC" "candidate table identifies the Kerberos and LDAP host"
+
+: > "$NMAP_LOG"
+env PATH="$FAKE_BIN:$PATH" OSCP_YES=1 FAKE_NMAP_LOG="$NMAP_LOG" "$AD_OSCP" nmap-deep-all >/dev/null
+[[ "$(grep -c -- '-sC' "$NMAP_LOG")" == "2" ]] || fail "deep-all did not scan every discovered host"
+ad_guide="$("$AD_OSCP" guide)"
+assert_contains "$ad_guide" "full 2/2" "AD dashboard reports full-scan coverage"
+assert_contains "$ad_guide" "deep 2/2" "AD dashboard reports deep-scan coverage"
+assert_contains "$ad_guide" "./scripts/oscp.sh set-dc DC_IP" "AD dashboard requests DC selection only after scans"
+
+set +e
+invalid_dc_output="$("$AD_OSCP" set-dc 10.0.2.99 2>&1)"
+invalid_dc_rc=$?
+set -e
+[[ "$invalid_dc_rc" -ne 0 ]] || fail "set-dc accepted a host that was not discovered"
+assert_contains "$invalid_dc_output" "not in" "set-dc explains its discovered-host requirement"
+
+"$AD_OSCP" set-dc 10.0.2.10 >/dev/null
+"$AD_OSCP" set-target 10.0.2.20 >/dev/null
+ad_context="$("$AD_OSCP" context)"
+assert_contains "$ad_context" "target=10.0.2.20" "AD active member host can change"
+assert_contains "$ad_context" "dc=10.0.2.10" "changing active host preserves selected DC"
+"$AD_OSCP" set-domain corp.invalid >/dev/null
+ad_default_output="$(OSCP_AD_NO_PROMPT=1 "$AD_OSCP" ad)"
+assert_contains "$ad_default_output" "DC / target : 10.0.2.10" "AD helper defaults to selected DC instead of active member"
+pass "DC and active member-host state remain separate"
 
 reference_output="$("$OSCP" reference ad)"
 assert_contains "$reference_output" "Active Directory Presumed-Breach Playbook" "AD reference is readable"

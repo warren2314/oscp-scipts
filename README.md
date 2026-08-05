@@ -89,7 +89,7 @@ Start each session with:
 ./scripts/oscp.sh guide
 ```
 
-The guided interface reuses the target, subnet, domain, and profile already saved in the workspace. Service actions such as SMB and LDAP enumeration do not ask for the target again; choose `Set up target and profile` only when you need to change it. Direct service commands also use the saved target when their optional IP argument is omitted.
+The guided interface reuses the target, subnet, DC, domain, and profile already saved in the workspace. Service actions such as SMB and LDAP enumeration do not ask for the target again; choose `Set up scope and profile` only when you need to change it. Direct service commands also use the saved active target when their optional IP argument is omitted.
 
 For an independent target:
 
@@ -107,9 +107,17 @@ For the AD set:
 ```bash
 ./scripts/oscp.sh profile ad
 ./scripts/oscp.sh phase enum
-./scripts/oscp.sh ad 192.168.56.10 corp.local alice
+./scripts/oscp.sh set-subnet 10.0.2.0/24
+./scripts/oscp.sh discover
+./scripts/oscp.sh nmap-full-all
+./scripts/oscp.sh nmap-deep-all
+./scripts/oscp.sh ad-candidates
+./scripts/oscp.sh set-dc 10.0.2.10
+./scripts/oscp.sh ad 10.0.2.10 corp.local alice
 ./scripts/oscp.sh reference ad
 ```
+
+AD setup is subnet-first. The toolkit does not ask you to guess the DC: it discovers hosts, creates separate full/deep scan state for every host, shows likely DC candidates from observed ports, and only then asks you to select the DC. `OSCP_DC` is stored separately from the active member-host target.
 
 When the password is omitted, the AD helper prompts for it without writing the plaintext password directly into shell history.
 
@@ -125,12 +133,15 @@ Track the current activity instead of relying on memory:
 
 Target setup, saved scans, credential logging, and screenshots automatically complete the corresponding tracker items. Service coverage, access, privilege escalation, and proof milestones remain yours to confirm after reviewing the evidence.
 
-For subnet work:
+For subnet work, save the exact authorised CIDR first:
 
 ```bash
+./scripts/oscp.sh set-subnet 10.0.2.0/24
 ./scripts/oscp.sh discover
 ./scripts/oscp.sh nmap-live
 ```
+
+The toolkit no longer infers permission to scan a `/24` from a single target IP. Batch scans validate every saved live host against the confirmed subnet before Nmap starts.
 
 For a single web service:
 

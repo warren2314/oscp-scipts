@@ -22,20 +22,26 @@ fi
 
 SAVED_TARGET=""
 SAVED_SUBNET=""
+SAVED_DC=""
 SAVED_DOMAIN=""
+SAVED_SCOPE_EXPLICIT="0"
 SAVED_PROFILE="standalone"
 
 load_saved_context() {
   local key value
   SAVED_TARGET=""
   SAVED_SUBNET=""
+  SAVED_DC=""
   SAVED_DOMAIN=""
+  SAVED_SCOPE_EXPLICIT="0"
   SAVED_PROFILE="standalone"
   while IFS='=' read -r key value; do
     case "$key" in
       target) SAVED_TARGET="$value" ;;
       subnet) SAVED_SUBNET="$value" ;;
+      dc) SAVED_DC="$value" ;;
       domain) SAVED_DOMAIN="$value" ;;
+      scope_explicit) SAVED_SCOPE_EXPLICIT="$value" ;;
       profile) SAVED_PROFILE="$value" ;;
     esac
   done < <("$OSCP" context)
@@ -71,29 +77,67 @@ setup_workspace() {
   load_saved_context
   profile="$(prompt "Profile (standalone or ad)" "$SAVED_PROFILE")"
   "$OSCP" profile "$profile" || return
-  target="$(prompt "Target/DC IP" "$SAVED_TARGET")"
-  [[ -n "$target" ]] || return
-  subnet_default=""
-  [[ "$target" == "$SAVED_TARGET" ]] && subnet_default="$SAVED_SUBNET"
-  subnet="$(prompt "Subnet CIDR (blank = inferred /24)" "$subnet_default")"
-  if [[ -n "$subnet" ]]; then
-    "$OSCP" set-target "$target" "$subnet"
+
+  if [[ "$profile" == "ad" ]]; then
+    subnet="$(prompt "Exact AD subnet CIDR" "$SAVED_SUBNET")"
+    [[ -n "$subnet" ]] || { echo "[-] An AD subnet CIDR is required."; return; }
+    "$OSCP" set-subnet "$subnet" || return
+    echo "[+] DC selection comes later, after every discovered host is scanned."
   else
-    "$OSCP" set-target "$target"
+    target="$(prompt "Target IP" "$SAVED_TARGET")"
+    [[ -n "$target" ]] || return
+    subnet_default=""
+    [[ "$target" == "$SAVED_TARGET" ]] && subnet_default="$SAVED_SUBNET"
+    subnet="$(prompt "Subnet CIDR (optional; blank = this IP only)" "$subnet_default")"
+    if [[ -n "$subnet" ]]; then
+      "$OSCP" set-target "$target" "$subnet"
+    else
+      "$OSCP" set-target "$target"
+    fi
   fi
-  if confirm "Have you verified this target and its objectives in the control panel/scope?"; then
+  if confirm "Have you verified this target/subnet and its objectives in the control panel/scope?"; then
     "$OSCP" task done scope-confirmed >/dev/null || true
   fi
 }
 
 scan_menu() {
-  local choice
+  local choice ip
+  load_saved_context
+  if [[ "$SAVED_PROFILE" == "ad" ]]; then
+    cat <<'MENU'
+  1) Discover hosts on the saved AD subnet (start here)
+  2) Full TCP scan every discovered host
+  3) Deep service scan every discovered host
+  4) Light top-1000 service scan across all discovered hosts
+  5) Show hosts and likely DC candidates
+  6) Select and save the DC
+  7) UDP top-100 scan on the selected DC/active host
+  b) Back
+MENU
+    read -r -p "scan> " choice
+    case "$choice" in
+      1) "$OSCP" discover ;;
+      2) "$OSCP" nmap-full-all ;;
+      3) "$OSCP" nmap-deep-all ;;
+      4) "$OSCP" nmap-live ;;
+      5) "$OSCP" ad-candidates ;;
+      6)
+        "$OSCP" ad-candidates || return
+        ip="$(prompt "DC IP from the discovered list" "$SAVED_DC")"
+        [[ -n "$ip" ]] && "$OSCP" set-dc "$ip"
+        ;;
+      7) confirm "UDP can take several minutes. Continue?" && "$OSCP" nmap-udp ;;
+      b|B|"") return ;;
+      *) echo "[-] Unknown option" ;;
+    esac
+    return
+  fi
+
   cat <<'MENU'
   1) Full TCP scan
   2) Deep scan on saved ports
   3) UDP top-100 scan
   4) Show saved ports
-  5) Discover hosts on saved subnet
   b) Back
 MENU
   read -r -p "scan> " choice
@@ -102,7 +146,6 @@ MENU
     2) "$OSCP" nmap-deep ;;
     3) confirm "UDP can take several minutes. Continue?" && "$OSCP" nmap-udp ;;
     4) "$OSCP" ports ;;
-    5) "$OSCP" discover ;;
     b|B|"") return ;;
     *) echo "[-] Unknown option" ;;
   esac
@@ -172,12 +215,19 @@ MENU
 ad_workflow() {
   local default_ip="" default_domain="" ip domain user secret principal
   load_saved_context
-  default_ip="$SAVED_TARGET"
+  default_ip="$SAVED_DC"
   default_domain="$SAVED_DOMAIN"
   if [[ -n "$default_ip" ]]; then
     ip="$default_ip"
   else
-    ip="$(prompt "DC IP" "")"
+    if [[ ! -s "$ROOT_DIR/scans/live_hosts.txt" ]]; then
+      echo "[-] No discovered hosts yet. Use Scanning -> Discover hosts first."
+      return
+    fi
+    "$OSCP" ad-candidates || return
+    ip="$(prompt "DC IP from the discovered list" "")"
+    [[ -n "$ip" ]] || return
+    "$OSCP" set-dc "$ip" || return
   fi
   if [[ -n "$default_domain" ]]; then
     domain="$default_domain"
@@ -185,7 +235,7 @@ ad_workflow() {
     domain="$(prompt "Domain FQDN" "")"
   fi
   user="$(prompt "Supplied username" "")"
-  [[ -n "$ip" && -n "$domain" && -n "$user" ]] || { echo "[-] DC IP, domain, and username are required."; return; }
+  [[ -n "$ip" && -n "$domain" && -n "$user" ]] || { echo "[-] Selected DC, domain, and username are required."; return; }
   "$OSCP" set-domain "$domain" >/dev/null || return
   read -r -s -p "Supplied password (blank = command placeholders): " secret; echo
   "$OSCP" profile ad >/dev/null
@@ -295,7 +345,7 @@ while true; do
   cat <<MENU
 
 ${BOLD}Choose one small next action:${RESET}
-  1) Set up target and profile
+  1) Set up scope and profile
   2) Scanning
   3) Service enumeration
   4) Notes, credentials, hashes, and focus

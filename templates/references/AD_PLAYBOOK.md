@@ -7,10 +7,17 @@ Use this when the control panel supplies a domain username and password. Work in
 ```bash
 ./scripts/oscp.sh profile ad
 ./scripts/oscp.sh phase enum
-./scripts/oscp.sh set-target DC_IP SUBNET_CIDR
+./scripts/oscp.sh set-subnet SUBNET_CIDR
+./scripts/oscp.sh discover
+./scripts/oscp.sh nmap-full-all
+./scripts/oscp.sh nmap-deep-all
+./scripts/oscp.sh ad-candidates
+./scripts/oscp.sh set-dc DC_IP
 ./scripts/oscp.sh focus "validate supplied AD credential"
-./scripts/oscp.sh note "AD start: supplied user, DC IP, domain, control-panel objectives"
+./scripts/oscp.sh note "AD start: supplied user, confirmed subnet/DC/domain, control-panel objectives"
 ```
+
+Do not guess the DC from the network address. Discover and scan the in-scope hosts first, review the observed Kerberos/LDAP/SMB services, then select the DC.
 
 Confirm:
 

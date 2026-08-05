@@ -1,6 +1,6 @@
 id	profile	state	label
 scope-confirmed	all	todo	Confirm the control-panel scope, target objectives, and current exam rules
-target-set	all	todo	Save the current target and subnet
+target-set	all	todo	Save the current target or exact subnet scope
 vpn-checked	all	todo	Confirm VPN address, routing, DNS, and time synchronization
 tcp-full	all	todo	Complete and save a full TCP port scan
 tcp-deep	all	todo	Complete scripts and version detection on discovered ports
