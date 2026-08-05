@@ -89,6 +89,8 @@ Start each session with:
 ./scripts/oscp.sh guide
 ```
 
+The guided interface reuses the target, subnet, domain, and profile already saved in the workspace. Service actions such as SMB and LDAP enumeration do not ask for the target again; choose `Set up target and profile` only when you need to change it. Direct service commands also use the saved target when their optional IP argument is omitted.
+
 For an independent target:
 
 ```bash

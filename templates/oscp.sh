@@ -8,7 +8,7 @@
 set -euo pipefail
 umask 077
 
-TOOLKIT_VERSION="2026.08.04-capture"
+TOOLKIT_VERSION="2026.08.05-saved-target"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCANS_DIR="$ROOT_DIR/scans"
 DISC_DIR="$SCANS_DIR/discovery"
@@ -588,6 +588,8 @@ Version:
 
 Setup:
   ./scripts/oscp.sh set-target <IP> [CIDR]
+  ./scripts/oscp.sh set-domain <DOMAIN>
+  ./scripts/oscp.sh context
   ./scripts/oscp.sh status
 
 Discovery and scanning:
@@ -605,13 +607,13 @@ Service enumeration:
   ./scripts/oscp.sh suggest [IP]               # print next manual checks
   ./scripts/oscp.sh enum-web <IP> <PORT> [DOMAIN]
   ./scripts/oscp.sh web-all [IP] [DOMAIN]
-  ./scripts/oscp.sh enum-smb <IP>
-  ./scripts/oscp.sh enum-ftp <IP> [PORT]
-  ./scripts/oscp.sh enum-ssh <IP> [PORT]
-  ./scripts/oscp.sh enum-rpc <IP>
-  ./scripts/oscp.sh enum-ldap <IP>
-  ./scripts/oscp.sh enum-snmp <IP>
-  ./scripts/oscp.sh enum-winrm <IP>
+  ./scripts/oscp.sh enum-smb [IP]
+  ./scripts/oscp.sh enum-ftp [IP] [PORT]
+  ./scripts/oscp.sh enum-ssh [IP] [PORT]
+  ./scripts/oscp.sh enum-rpc [IP]
+  ./scripts/oscp.sh enum-ldap [IP]
+  ./scripts/oscp.sh enum-snmp [IP]
+  ./scripts/oscp.sh enum-winrm [IP]
 
 Workflow helpers:
   ./scripts/oscp.sh guide                      # dashboard and next three actions
@@ -906,8 +908,8 @@ web_all() {
 }
 
 enum_smb() {
-  local ip="${1:-}"
-  require_ipv4 "$ip" "SMB target"
+  local ip
+  ip="$(target_or_default "${1:-}")"
   local outdir="$SMB_DIR/$ip"
   mkdir -p "$outdir"
 
@@ -928,9 +930,9 @@ enum_smb() {
 }
 
 enum_ftp() {
-  local ip="${1:-}"
+  local ip
   local port="${2:-21}"
-  require_ipv4 "$ip" "FTP target"
+  ip="$(target_or_default "${1:-}")"
   [[ "$port" =~ ^[0-9]+$ ]] || die "Invalid port: $port"
   local outdir="$FTP_DIR/${ip}_${port}"
   mkdir -p "$outdir"
@@ -945,9 +947,9 @@ enum_ftp() {
 }
 
 enum_ssh() {
-  local ip="${1:-}"
+  local ip
   local port="${2:-22}"
-  require_ipv4 "$ip" "SSH target"
+  ip="$(target_or_default "${1:-}")"
   [[ "$port" =~ ^[0-9]+$ ]] || die "Invalid port: $port"
   local outdir="$ROOT_DIR/output/ssh_${ip}_${port}"
   mkdir -p "$outdir"
@@ -960,8 +962,8 @@ enum_ssh() {
 }
 
 enum_rpc() {
-  local ip="${1:-}"
-  require_ipv4 "$ip" "RPC target"
+  local ip
+  ip="$(target_or_default "${1:-}")"
   local outdir="$RPC_DIR/$ip"
   mkdir -p "$outdir"
 
@@ -975,8 +977,8 @@ enum_rpc() {
 }
 
 enum_ldap() {
-  local ip="${1:-}"
-  require_ipv4 "$ip" "LDAP target"
+  local ip
+  ip="$(target_or_default "${1:-}")"
   local outdir="$LDAP_DIR/$ip"
   mkdir -p "$outdir"
 
@@ -989,8 +991,8 @@ enum_ldap() {
 }
 
 enum_snmp() {
-  local ip="${1:-}"
-  require_ipv4 "$ip" "SNMP target"
+  local ip
+  ip="$(target_or_default "${1:-}")"
   local outdir="$SNMP_DIR/$ip"
   mkdir -p "$outdir"
 
@@ -1007,8 +1009,8 @@ enum_snmp() {
 }
 
 enum_winrm() {
-  local ip="${1:-}"
-  require_ipv4 "$ip" "WinRM target"
+  local ip
+  ip="$(target_or_default "${1:-}")"
   local outdir="$WINRM_DIR/$ip"
   mkdir -p "$outdir"
 
@@ -1781,6 +1783,14 @@ current_profile() {
   esac
 }
 
+context_helper() {
+  load_env_file
+  printf 'target=%s\n' "${OSCP_TARGET:-}"
+  printf 'subnet=%s\n' "${OSCP_SUBNET:-}"
+  printf 'domain=%s\n' "${OSCP_DOMAIN:-}"
+  printf 'profile=%s\n' "$(current_profile)"
+}
+
 profile_helper() {
   local profile="${1:-}"
   if [[ -z "$profile" ]]; then
@@ -1960,19 +1970,19 @@ guide() {
   if [[ -z "$target" ]]; then
     echo "  ./scripts/oscp.sh set-target TARGET_IP [SUBNET_CIDR]"
   elif [[ -z "$ports" ]]; then
-    echo "  ./scripts/oscp.sh nmap-full $target"
+    echo "  ./scripts/oscp.sh nmap-full"
   elif [[ -z "$deep_scan" ]]; then
-    echo "  ./scripts/oscp.sh nmap-deep $target"
+    echo "  ./scripts/oscp.sh nmap-deep"
   else
     case "$phase" in
       setup|enum)
-        echo "  ./scripts/oscp.sh ports $target"
-        echo "  ./scripts/oscp.sh suggest $target"
+        echo "  ./scripts/oscp.sh ports"
+        echo "  ./scripts/oscp.sh suggest"
         if [[ "$profile" == "ad" ]]; then
           echo "  ./scripts/oscp.sh ad $target DOMAIN USER"
           echo "  ./scripts/oscp.sh reference ad"
         else
-          echo "  ./scripts/oscp.sh enum-all $target"
+          echo "  ./scripts/oscp.sh enum-all"
         fi
         ;;
       foothold)
@@ -2755,6 +2765,18 @@ set_target() {
   task_set_state "target-set" "done" 1
 }
 
+set_domain() {
+  local domain="${1:-}"
+  load_env_file
+  domain="$(normalize_domain "$domain")"
+  domain="${domain,,}"
+  [[ -n "$domain" ]] || die "set-domain needs a DNS domain"
+  [[ "$domain" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ && "$domain" == *.* ]] || die "Invalid DNS domain: $domain"
+  OSCP_DOMAIN="$domain"
+  save_env_file "${OSCP_TARGET:-}" "${OSCP_SUBNET:-}"
+  note "Set domain=$domain"
+}
+
 cmd="${1:-}"
 case "$cmd" in
   guide|dashboard|next) shift; guide ;;
@@ -2764,6 +2786,7 @@ case "$cmd" in
   task|progress) shift; task_helper "${1:-list}" "${2:-}" ;;
   reference|ref) shift; reference_helper "${1:-list}" ;;
   set-target) shift; set_target "${1:-}" "${2:-}" ;;
+  set-domain) shift; set_domain "${1:-}" ;;
   discover) shift; discover "${1:-}" ;;
   discover-wide) shift; discover_wide "${1:-}" ;;
   nmap-live) shift; nmap_live ;;
@@ -2798,6 +2821,7 @@ case "$cmd" in
   screenshot|shot|evidence-shot) shift; screenshot_evidence "${1:-evidence}" "${2:-}" ;;
   show-live) shift; show_live ;;
   status) shift; status ;;
+  context) shift; context_helper ;;
   note) shift; note "$*" ;;
   capture) shift; capture_command "$@" ;;
   cred) shift; cred "$*" ;;

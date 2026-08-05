@@ -20,6 +20,28 @@ else
   BOLD=""; RESET=""; CYAN=""; YELLOW=""
 fi
 
+SAVED_TARGET=""
+SAVED_SUBNET=""
+SAVED_DOMAIN=""
+SAVED_PROFILE="standalone"
+
+load_saved_context() {
+  local key value
+  SAVED_TARGET=""
+  SAVED_SUBNET=""
+  SAVED_DOMAIN=""
+  SAVED_PROFILE="standalone"
+  while IFS='=' read -r key value; do
+    case "$key" in
+      target) SAVED_TARGET="$value" ;;
+      subnet) SAVED_SUBNET="$value" ;;
+      domain) SAVED_DOMAIN="$value" ;;
+      profile) SAVED_PROFILE="$value" ;;
+    esac
+  done < <("$OSCP" context)
+  [[ "$SAVED_PROFILE" == "standalone" || "$SAVED_PROFILE" == "ad" ]] || SAVED_PROFILE="standalone"
+}
+
 pause() {
   echo
   read -r -p "Press Enter to continue..."
@@ -45,12 +67,15 @@ confirm() {
 }
 
 setup_workspace() {
-  local profile target subnet
-  profile="$(prompt "Profile (standalone or ad)" "standalone")"
+  local profile target subnet subnet_default
+  load_saved_context
+  profile="$(prompt "Profile (standalone or ad)" "$SAVED_PROFILE")"
   "$OSCP" profile "$profile" || return
-  target="$(prompt "Target/DC IP" "")"
+  target="$(prompt "Target/DC IP" "$SAVED_TARGET")"
   [[ -n "$target" ]] || return
-  subnet="$(prompt "Subnet CIDR (blank = inferred /24)" "")"
+  subnet_default=""
+  [[ "$target" == "$SAVED_TARGET" ]] && subnet_default="$SAVED_SUBNET"
+  subnet="$(prompt "Subnet CIDR (blank = inferred /24)" "$subnet_default")"
   if [[ -n "$subnet" ]]; then
     "$OSCP" set-target "$target" "$subnet"
   else
@@ -85,6 +110,7 @@ MENU
 
 enum_menu() {
   local choice ip port domain
+  load_saved_context
   cat <<'MENU'
   1) Suggest manual checks from saved ports
   2) Enumerate detected services
@@ -100,13 +126,18 @@ MENU
     2) confirm "Run service-aware enumeration now?" && "$OSCP" enum-all ;;
     3) "$OSCP" web-all ;;
     4)
-      ip="$(prompt "Target IP" "")"
+      if [[ -n "$SAVED_TARGET" ]]; then
+        ip="$SAVED_TARGET"
+      else
+        ip="$(prompt "Target IP" "")"
+      fi
+      [[ -n "$ip" ]] || { echo "[-] Set a target first."; return; }
       port="$(prompt "Port" "80")"
-      domain="$(prompt "Domain (optional)" "")"
+      domain="$SAVED_DOMAIN"
       "$OSCP" enum-web "$ip" "$port" "$domain"
       ;;
-    5) ip="$(prompt "Target IP" "")"; "$OSCP" enum-smb "$ip" ;;
-    6) ip="$(prompt "Target IP" "")"; "$OSCP" enum-ldap "$ip" ;;
+    5) "$OSCP" enum-smb ;;
+    6) "$OSCP" enum-ldap ;;
     b|B|"") return ;;
     *) echo "[-] Unknown option" ;;
   esac
@@ -140,14 +171,22 @@ MENU
 
 ad_workflow() {
   local default_ip="" default_domain="" ip domain user secret principal
-  if [[ -f "$ROOT_DIR/.oscp_env" ]]; then
-    default_ip="$(awk -F= '$1=="OSCP_TARGET" {print $2; exit}' "$ROOT_DIR/.oscp_env" 2>/dev/null || true)"
-    default_domain="$(awk -F= '$1=="OSCP_DOMAIN" {print $2; exit}' "$ROOT_DIR/.oscp_env" 2>/dev/null || true)"
+  load_saved_context
+  default_ip="$SAVED_TARGET"
+  default_domain="$SAVED_DOMAIN"
+  if [[ -n "$default_ip" ]]; then
+    ip="$default_ip"
+  else
+    ip="$(prompt "DC IP" "")"
   fi
-  ip="$(prompt "DC IP" "$default_ip")"
-  domain="$(prompt "Domain FQDN" "$default_domain")"
+  if [[ -n "$default_domain" ]]; then
+    domain="$default_domain"
+  else
+    domain="$(prompt "Domain FQDN" "")"
+  fi
   user="$(prompt "Supplied username" "")"
   [[ -n "$ip" && -n "$domain" && -n "$user" ]] || { echo "[-] DC IP, domain, and username are required."; return; }
+  "$OSCP" set-domain "$domain" >/dev/null || return
   read -r -s -p "Supplied password (blank = command placeholders): " secret; echo
   "$OSCP" profile ad >/dev/null
   if [[ -n "$secret" ]] && confirm "Log this supplied credential in the workspace?"; then
@@ -248,6 +287,7 @@ MENU
 }
 
 while true; do
+  load_saved_context
   printf '\033[H\033[2J'
   echo "${CYAN}${BOLD}OSCP GUIDED WORKSPACE${RESET}  $(basename "$ROOT_DIR")"
   echo

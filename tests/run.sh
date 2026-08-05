@@ -53,8 +53,38 @@ OSCP="$WORKSPACE/scripts/oscp.sh"
 guide_output="$("$OSCP" guide)"
 assert_contains "$guide_output" "GUIDED DASHBOARD" "dashboard renders"
 assert_contains "$guide_output" "192.0.2.10" "dashboard loads target state"
+assert_contains "$guide_output" "./scripts/oscp.sh nmap-full" "dashboard recommends saved-target command"
+[[ "$guide_output" != *'nmap-full 192.0.2.10'* ]] || fail "dashboard unnecessarily repeats the saved target"
 grep -q $'^target-set\tall\tdone\t' "$WORKSPACE/reports/progress.tsv" || fail "dashboard did not auto-complete target-set"
 pass "dashboard auto-completes target task"
+
+context_output="$("$OSCP" context)"
+assert_contains "$context_output" "target=192.0.2.10" "context exposes validated saved target"
+assert_contains "$context_output" "profile=standalone" "context exposes saved profile"
+
+FAKE_BIN="$TEST_ROOT/fake-bin"
+mkdir -p "$FAKE_BIN"
+cat > "$FAKE_BIN/fake-service-tool" <<'EOF'
+#!/usr/bin/env bash
+printf 'fake %s' "$(basename "$0")"
+printf ' %q' "$@"
+printf '\n'
+EOF
+chmod +x "$FAKE_BIN/fake-service-tool"
+for tool in smbclient smbmap enum4linux-ng netexec; do
+  ln -s fake-service-tool "$FAKE_BIN/$tool"
+done
+
+guided_output="$(printf '3\n5\n\nq\n' | env PATH="$FAKE_BIN:$PATH" "$WORKSPACE/scripts/guided.sh" 2>&1)"
+assert_contains "$guided_output" "SMB enum complete" "guided SMB action uses saved target"
+[[ "$guided_output" != *'Target IP:'* ]] || fail "guided SMB action prompted for an already saved target"
+[[ -d "$WORKSPACE/smb/192.0.2.10" ]] || fail "guided SMB action used the wrong target"
+pass "guided service action avoids repeated target prompt"
+
+override_output="$(env PATH="$FAKE_BIN:$PATH" "$OSCP" enum-smb 198.51.100.25 2>&1)"
+assert_contains "$override_output" "198.51.100.25" "explicit service target overrides saved target"
+context_output="$("$OSCP" context)"
+assert_contains "$context_output" "target=192.0.2.10" "one-off service override leaves saved target unchanged"
 
 "$OSCP" profile ad >/dev/null
 "$OSCP" phase lateral >/dev/null
@@ -71,7 +101,7 @@ assert_contains "$ad_output" "Domain      : corp.invalid" "AD dispatcher forward
 assert_contains "$ad_output" "Username    : alice" "AD dispatcher forwards username"
 
 help_output="$("$OSCP" --help)"
-assert_contains "$help_output" "2026.08.04-capture" "help expands toolkit version"
+assert_contains "$help_output" "2026.08.05-saved-target" "help expands toolkit version"
 [[ "$help_output" != *'$TOOLKIT_VERSION'* ]] || fail "help contains literal version variable"
 pass "help has no literal version placeholder"
 
@@ -95,6 +125,10 @@ failure_file="$(find "$WORKSPACE/evidence/commands" -maxdepth 1 -type f -name '*
 [[ -n "$failure_file" && -f "$failure_file" ]] || fail "failed capture output file was not created"
 grep -q '\[exit-code: 7\]' "$failure_file" || fail "failed capture file is missing exit status"
 pass "failed command capture preserves evidence and exit status"
+
+"$OSCP" set-domain 'https://CORP.INVALID/' >/dev/null
+context_output="$("$OSCP" context)"
+assert_contains "$context_output" "domain=corp.invalid" "domain is normalized and persisted"
 
 cat >> "$WORKSPACE/.oscp_env" <<'EOF'
 OSCP_DISCOVERY_PORTS=53,88,445
